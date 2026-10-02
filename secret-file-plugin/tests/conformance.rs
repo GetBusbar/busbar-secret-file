@@ -340,6 +340,7 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
         linked["open_again"], "Refused lease=false ",
         "one open per instance"
     );
+    eprintln!("the linked transcript: {linked:#}");
     let mut resolved = linked["resolve"].clone();
     let not_object = resolved[4].as_str().unwrap().to_string();
     assert!(
