@@ -293,6 +293,24 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
         stated(),
         "the linked and the dropped-in door state different Statements"
     );
+    let stated_read = busbar_contract::abi::mechanism::rendering::read(&stated())
+        .unwrap_or_else(|e| panic!("the rendering reads back: byte {} is not {}", e.at, e.what));
+    assert_eq!(
+        stated_read.rewrites,
+        vec![
+            (
+                busbar_contract::abi::mechanism::door::REWRITE_ALIAS,
+                "file".to_string(),
+                String::new()
+            ),
+            (
+                busbar_contract::abi::mechanism::door::REWRITE_SUGAR,
+                "file".to_string(),
+                String::new()
+            ),
+        ],
+        "the Statement names the source by its module alias and its reference sugar"
+    );
     let d = dispatcher();
     let linked = transcript(&linked(&d));
     let dropped_in = transcript(&dropped(&d));
