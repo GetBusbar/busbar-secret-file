@@ -1,7 +1,7 @@
-<!-- fleet:header:begin (rendered by `cargo xtask fleet render` from GetBusbar/busbar's plugins.yaml; edit it there) -->
+<!-- fleet:header:begin (rendered by `busbar-release plugin sync` from GetBusbar/busbar-release template/ and busbar's plugins.yaml; edit it there) -->
 # busbar-secret-file
 
-First-party signed kind:secret plugin cdylib: the file secret source (`{ file: /path }`), packaged as a droppable busbar plugin. busbar links it in the default build; a build without it resolves `{ file: /path }` only when the signed tarball is dropped into plugins/.
+First-party signed kind:secret plugin cdylib: the file secret source (module: file), resolving a config secret from the filesystem. Part of the default build; drop the signed tarball into plugins/ for a bare-bones build.
 
 | kind | alias | crate | busbar | license |
 |---|---|---|---|---|
