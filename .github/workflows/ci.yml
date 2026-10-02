@@ -1,0 +1,27 @@
+# RENDERED by `cargo xtask fleet render busbar-secret-file` from GetBusbar/busbar's plugins.yaml and
+# .github/fleet/ templates; `cargo xtask fleet check` is red on any edit here. The CI itself is
+# busbar's plugin-ci.yml, taken at the busbar commit this repo pins (.busbar-ref).
+name: ci
+
+on:
+  push:
+    branches: [dev, qa, main]
+  pull_request:
+    branches: [dev, qa, main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: GetBusbar/busbar/.github/workflows/plugin-ci.yml@c4d725436d011d22c7eb9659f15b5b7ea78c4a9a
+    with:
+      service: none
+      busbar_checkout: false
+      macos_test: "cargo test --workspace --locked --lib --test conformance"
+      extra_test: ""
+      plugin_crate: busbar-secret-file-plugin
+      plugin_kind: secret
+      plugin_alias: file
+    secrets: inherit

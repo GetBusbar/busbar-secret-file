@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "busbar-secret-file"
+version = "1.0.0"
+publish = false            # linked into busbar at a pinned rev, or shipped as a signed tarball; never to crates.io
+edition = "2021"
+rust-version = "1.97"
+description = "The file secret source for busbar's kind:secret plugin family, on the secret kind's memory ABI: `{ file: /path }` resolves to the file's bytes, untouched, fail-closed."
+license = "Apache-2.0"
+
+[lib]
+# rlib only: the logic and its door. A build that LINKS this crate registers `door::door` as its
+# row (no symbol is exported from here); the dropped-in cdylib is `busbar-secret-file-plugin`
+# (same repo), which exports the same door as `busbar_plugin_door`.
+crate-type = ["rlib"]
+
+[dependencies]
+# The ONE busbar crate a plugin names (#40: contract only), pinned by git rev to `.busbar-ref`.
+busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "c4d725436d011d22c7eb9659f15b5b7ea78c4a9a" }
+serde_json = "1"
