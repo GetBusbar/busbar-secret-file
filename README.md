@@ -5,7 +5,7 @@ First-party signed kind:secret plugin cdylib: the file secret source (module: fi
 
 | kind | alias | crate | busbar | license |
 |---|---|---|---|---|
-| `secret` | `file` | `busbar-secret-file-plugin` | 1.6.0 (pinned in `.busbar-ref`) | MIT |
+| `secret` | `file` | `busbar-secret-file-plugin` | 1.6.0 (pinned in `.busbar-ref`) | Apache-2.0 |
 
 [![ci](https://github.com/GetBusbar/busbar-secret-file/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/GetBusbar/busbar-secret-file/actions/workflows/ci.yml)
 <!-- fleet:header:end -->
