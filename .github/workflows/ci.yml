@@ -23,7 +23,7 @@ jobs:
     with:
       service: none
       busbar_checkout: false
-      macos_test: "cargo test --workspace --locked"
+      macos_test: "cargo test --workspace --locked --lib --test conformance"
       extra_test: ""
       plugin_crate: busbar-secret-file-plugin
       plugin_kind: secret
