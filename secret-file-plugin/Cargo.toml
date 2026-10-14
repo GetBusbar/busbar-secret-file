@@ -21,5 +21,7 @@ busbar-contract = { workspace = true }
 [dev-dependencies]
 # The conformance test loads the built cdylib and the linked door over the REAL loader — dev-only,
 # never in the shipped artifact. Same pinned rev, so one busbar source resolves.
-busbar-plugin-loader = { workspace = true }
+# `conformance`: busbar's PUBLISHED conformance suite (`tests/conformance.rs`'s `conformance_suite!`),
+# run against the busbar commit this repo pins.
+busbar-plugin-loader = { workspace = true, features = ["conformance"] }
 serde_json = { workspace = true }

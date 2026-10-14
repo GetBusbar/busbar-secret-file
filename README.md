@@ -1,4 +1,4 @@
-<!-- fleet:header:begin (rendered by `busbar-release plugin sync` from GetBusbar/busbar-release template/ and busbar's plugins.yaml; edit it there) -->
+<!-- fleet:header:begin (rendered by `busbar-release plugin heal` from GetBusbar/busbar-release template/ and busbar's plugins.yaml; edit it there) -->
 # busbar-secret-file
 
 First-party signed kind:secret plugin cdylib: the file secret source (`{ file: /path }`), packaged as a droppable busbar plugin. busbar links it in the default build; a build without it resolves `{ file: /path }` only when the signed tarball is dropped into plugins/.
