@@ -105,7 +105,7 @@ fn bind(d: &Dispatcher) -> Bind {
         max_inflight_cap: 64,
         sink: Arc::new(NoSink),
         dispatcher: d.adopter(),
-        conns: None,
+        conns: busbar_plugin_loader::dispatch::ConnTable::NoNeeds,
     }
 }
 
@@ -413,4 +413,18 @@ fn a_statement_mismatch_is_refused() {
         matches!(err, LoadError::ManifestMechanism { .. }),
         "{err:?}"
     );
+}
+
+// THE PUBLISHED CONFORMANCE SUITE, RUN BY THIS PLUGIN (THE DESIGN §2 "Each plugin tests itself";
+// Part 2 #2: each kind has ONE suite): busbar's suite at the commit this repo pins (`.busbar-ref`)
+// drives the `file` source two ways through the one loader, LINKED (the logic crate's `door`) and
+// DROPPED IN (this crate's built cdylib), over the secret kind's script with the inputs in
+// `conformance.json`: the known secret is `tests/conformance.secret` (cargo runs a test from the
+// package root), the unknown one a path no file holds. Every step's crossings exactly at the
+// script's pin, the two folds equal, and the suite's RED arms kept. `plugin-ci.yml` runs it under
+// `--release`.
+busbar_plugin_loader::conformance_suite! {
+    door: busbar_secret_file::door::door,
+    cdylib: "busbar_secret_file_plugin",
+    inputs: include_str!("conformance.json"),
 }
