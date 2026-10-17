@@ -27,6 +27,12 @@ pub mod door;
 /// The plugin's name (the manifest name).
 pub const NAME: &str = "busbar-secret-file";
 
+/// THE PLUGIN'S `declares` SECTION (its `declares.json`), as a linked build reads it beside a
+/// dropped-in copy's signed one: this source reads the disk (`"disk": true`), so the host resolves
+/// it only at config time, on its bounded disk lane, never from a request path (busbar
+/// `BUSBAR-1.6.0.md` l.1464-1469, R4, OWNER 2026-10-13).
+pub const DECLARES: &str = include_str!("../declares.json");
+
 /// The largest a `file:`-sourced secret is allowed to be. A secret is a credential (an API key, a
 /// bearer token, a TLS private key or a short PEM chain, a service-account JSON blob) — never a
 /// multi-megabyte payload — so 1 MiB is generous headroom above any realistic secret while still
