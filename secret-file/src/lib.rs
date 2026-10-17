@@ -32,8 +32,10 @@ pub mod door;
 /// The plugin's name (the manifest name).
 pub const NAME: &str = "busbar-secret-file";
 
-/// The manifest `declares` section (`--declares-file` for the signed tarball; the linked row's
-/// `linked-declares` in busbar): the disk need.
+/// THE PLUGIN'S `declares` SECTION (its `declares.json`), as a linked build reads it beside a
+/// dropped-in copy's signed one: this source reads the disk (`"disk": true`), so the host resolves
+/// it only at config time, on its bounded disk lane, never from a request path (busbar
+/// `BUSBAR-1.6.0.md` l.1464-1469, R4, OWNER 2026-10-13).
 pub const DECLARES: &str = include_str!("../declares.json");
 
 /// What a path that is not a regular file is refused as (an `Other` error, so [`io_refusal`] makes

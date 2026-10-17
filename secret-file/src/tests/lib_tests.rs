@@ -151,3 +151,12 @@ fn settings_that_are_not_an_object_are_invalid() {
     let e = settings_of(b"[1]").unwrap_err();
     assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
 }
+
+/// R4 (busbar `BUSBAR-1.6.0.md` l.1464-1469): the file source reads the disk, and says so in its
+/// `declares`, so the host resolves it only at config time on its disk lane. RED ARM: the section
+/// stated only its contract range, and the host resolved this source on a request path.
+#[test]
+fn the_declares_section_states_the_disk_need() {
+    let d: serde_json::Value = serde_json::from_str(DECLARES).expect("declares.json is JSON");
+    assert_eq!(d["disk"], serde_json::Value::Bool(true), "{DECLARES}");
+}
