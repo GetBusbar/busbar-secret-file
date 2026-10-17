@@ -93,7 +93,7 @@ fn a_large_file_resolves_whole_as_1_5_5_read_it() {
 #[cfg(unix)]
 #[test]
 fn the_opened_handle_is_checked_not_only_the_path() {
-    let e = read_bounded("/dev/zero").unwrap_err();
+    let e = read_file("/dev/zero").unwrap_err();
     assert_eq!(
         e.to_string(),
         "'/dev/zero' is not a regular file (it is a device node, socket, or fifo); a `file:` \
