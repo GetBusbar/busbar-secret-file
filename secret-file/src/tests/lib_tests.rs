@@ -73,24 +73,33 @@ fn a_missing_file_is_not_found_naming_the_path() {
     );
 }
 
+/// RED (audit pinned secret-file #2): PARITY WITH 1.5.5, which read a `file:` secret whole
+/// (`std::fs::read`, v1.5.5 `crates/busbar/src/config/secret.rs` `resolve_builtin`): a file of
+/// several MiB (a large PEM bundle) resolves byte for byte, never refused for its size.
 #[test]
-fn the_size_cap_is_exact_and_bounded() {
-    let p = temp_path("cap");
-    std::fs::write(&p, vec![b'a'; MAX_SECRET_FILE_BYTES as usize]).unwrap();
-    assert_eq!(
-        resolve(&path(&p)).unwrap().len() as u64,
-        MAX_SECRET_FILE_BYTES
-    );
-    std::fs::write(&p, vec![b'a'; MAX_SECRET_FILE_BYTES as usize + 1]).unwrap();
-    let e = resolve(&path(&p)).unwrap_err();
-    assert!(
-        e.message
-            .ends_with("file exceeds the 1048576-byte secret size limit"),
-        "{}",
-        e.message
-    );
-    assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
+fn a_large_file_resolves_whole_as_1_5_5_read_it() {
+    let p = temp_path("large");
+    let large: Vec<u8> = (0..3 * 1024 * 1024 + 7)
+        .map(|i| b'a' + (i % 26) as u8)
+        .collect();
+    std::fs::write(&p, &large).unwrap();
+    assert_eq!(resolve(&path(&p)).unwrap(), large);
     let _ = std::fs::remove_file(&p);
+}
+
+/// RED (audit pinned secret-file #3): the regular-file rule holds on the OPENED handle, not only on
+/// the path checked before the open, so a path that names a device node by the time it is opened
+/// is refused in the registered words and never read.
+#[cfg(unix)]
+#[test]
+fn the_opened_handle_is_checked_not_only_the_path() {
+    let e = read_file("/dev/zero").unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "'/dev/zero' is not a regular file (it is a device node, socket, or fifo); a `file:` \
+         secret must name a regular file holding the credential bytes (fail-closed)"
+    );
+    assert_eq!(e.kind(), std::io::ErrorKind::Other);
 }
 
 #[test]

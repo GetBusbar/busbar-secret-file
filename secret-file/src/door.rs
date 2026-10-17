@@ -8,8 +8,9 @@
 //! * `validate`, `open`, `refresh` — the source holds no settings and no state: any settings object
 //!   opens it.
 //! * `resolve` — a reference's `{ path: PATH }` to the file's bytes, READY under a lease (the
-//!   SDK's [`Held`] leases, zeroed on release), or FAILED with its `ERROR_KIND_*` and 1.5.5's text.
-//!   It never pends.
+//!   SDK's [`Held`] leases, zeroed on release), or FAILED with its `ERROR_KIND_*` and its text. It
+//!   never pends: the read is the disk's, and the host runs it on its bounded disk lane at config
+//!   time only (the declared disk need, THE DESIGN §11.11 R4).
 //! * `release`, `close`, `cancel`, `tick`, `retire`, `drive` — the SDK's.
 
 use busbar_contract::abi::mechanism::call::{Outcome, BLOB_OCTETS};

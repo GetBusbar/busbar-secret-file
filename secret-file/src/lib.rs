@@ -11,7 +11,12 @@
 //!
 //! It is an ordinary plugin (THE DESIGN §2): linked in the default build or dropped in, called
 //! through the secret kind table by the one dispatcher, and loaded only when a reference names it.
-//! Every refusal text is 1.5.5's, byte for byte; none carries the file's content.
+//! It reads the local disk, so its declares document ([`DECLARES`]) states the disk need: the host
+//! runs its `resolve` on the bounded disk lane, at config time only (THE DESIGN §11.11 R4).
+//!
+//! The missing-path, EMPTY-file and `cannot resolve: <cause>` refusals are 1.5.5's, byte for byte;
+//! the BLANK-file and not-a-regular-file refusals are new in 1.6.0 (registered in busbar's
+//! CHANGELOG). No refusal carries the file's content.
 
 #![forbid(unsafe_code)]
 
@@ -33,33 +38,35 @@ pub const NAME: &str = "busbar-secret-file";
 /// `BUSBAR-1.6.0.md` l.1464-1469, R4, OWNER 2026-10-13).
 pub const DECLARES: &str = include_str!("../declares.json");
 
-/// The largest a `file:`-sourced secret is allowed to be. A secret is a credential (an API key, a
-/// bearer token, a TLS private key or a short PEM chain, a service-account JSON blob) — never a
-/// multi-megabyte payload — so 1 MiB is generous headroom above any realistic secret while still
-/// bounding memory: `settings.path` can name any path the process can read (a device node such as
-/// `/dev/zero`, a named pipe, an operator-controlled mount), and an unbounded read would buffer the
-/// whole thing before the emptiness checks ever run, turning a misconfigured or hostile path into an
-/// OOM.
-pub const MAX_SECRET_FILE_BYTES: u64 = 1024 * 1024;
+/// What a path that is not a regular file is refused as (an `Other` error, so [`io_refusal`] makes
+/// it `Invalid`, and its text follows `cannot resolve: `). A directory `open()`s fine on Unix and
+/// fails only at read time with a bare errno ("Is a directory"), which does not tell an operator
+/// they pointed the credential at a folder; a fifo opens and then BLOCKS until a writer appears; a
+/// device node such as `/dev/zero` never ends.
+fn not_regular(path: &str, md: &std::fs::Metadata) -> std::io::Error {
+    let kind = if md.is_dir() {
+        "a directory"
+    } else {
+        "a device node, socket, or fifo"
+    };
+    std::io::Error::other(format!(
+        "'{path}' is not a regular file (it is {kind}); a `file:` secret must name a regular file \
+         holding the credential bytes (fail-closed)"
+    ))
+}
 
-/// Read `path` with [`MAX_SECRET_FILE_BYTES`] enforced BEFORE the read buffers the content, not
-/// after: `Read::take` caps the reader itself, so a file (or fifo, or device node) larger than the
-/// limit never gets fully materialized in memory. A file over the cap is a hard error (fail-closed),
-/// never a silent truncation — a truncated credential is worse than a rejected one.
-fn read_bounded(path: &str) -> std::io::Result<Vec<u8>> {
+/// Read `path` whole, as 1.5.5 read it (`std::fs::read`), once the OPENED handle is a regular
+/// file: the type is judged on what was opened, not on whatever the path named before the open.
+fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
 
     let mut file = std::fs::File::open(path)?;
-    let mut buf = Vec::new();
-    // Read one byte PAST the cap: a file of exactly the limit is accepted, and a file one byte
-    // over it is provably over, without ever buffering more than `MAX_SECRET_FILE_BYTES + 1` bytes.
-    let mut limited = (&mut file).take(MAX_SECRET_FILE_BYTES + 1);
-    limited.read_to_end(&mut buf)?;
-    if buf.len() as u64 > MAX_SECRET_FILE_BYTES {
-        return Err(std::io::Error::other(format!(
-            "file exceeds the {MAX_SECRET_FILE_BYTES}-byte secret size limit"
-        )));
+    let md = file.metadata()?;
+    if !md.is_file() {
+        return Err(not_regular(path, &md));
     }
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)?;
     Ok(buf)
 }
 
@@ -77,7 +84,7 @@ fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
 /// Resolve `settings` (`{ path: PATH }`) to the file's bytes, untouched.
 ///
 /// # Errors
-/// Fail-closed: a missing, unreadable, non-regular, empty, whitespace-only or over-size file is
+/// Fail-closed: a missing, unreadable, non-regular, empty or whitespace-only file is
 /// refused, and so is a missing or blank `path`. The text names the path, never the content.
 pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretResult<Vec<u8>> {
     let path = match settings
@@ -92,29 +99,19 @@ pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretR
             ))
         }
     };
-    // A path-shaped source must name a REGULAR FILE. A directory `open()`s fine on Unix and fails
-    // only at read time with a bare errno ("Is a directory"), which does not tell an operator they
-    // pointed the credential at a folder; a fifo opens and then BLOCKS until a writer appears,
-    // hanging boot with no diagnostic at all. `fs::metadata` FOLLOWS symlinks, which is required:
-    // Kubernetes projects every secret as a symlink into a `..data/` directory.
+    // A path-shaped source must name a REGULAR FILE ([`not_regular`]), judged here on the path
+    // before the open so a fifo is never opened (an open of one blocks until a writer appears), and
+    // again on the opened handle ([`read_file`]). `fs::metadata` FOLLOWS symlinks, which is
+    // required: Kubernetes projects every secret as a symlink into a `..data/` directory.
     //
     // A metadata error is deliberately NOT handled here — a missing or unreadable path falls
     // through to the read below so it keeps its "cannot resolve: <cause>" message.
     if let Ok(md) = std::fs::metadata(path) {
         if !md.is_file() {
-            let kind = if md.is_dir() {
-                "a directory"
-            } else {
-                "a device node, socket, or fifo"
-            };
-            return Err(SecretModuleError::invalid(format!(
-                "secret file:{path} cannot resolve: '{path}' is not a regular file (it is \
-                 {kind}); a `file:` secret must name a regular file holding the credential \
-                 bytes (fail-closed)"
-            )));
+            return Err(io_refusal(path, &not_regular(path, &md)));
         }
     }
-    match read_bounded(path) {
+    match read_file(path) {
         Ok(bytes) if bytes.is_empty() => Err(SecretModuleError::invalid(format!(
             "secret file:{path} resolved to an EMPTY file; a secret must be non-empty \
              (fail-closed)"
