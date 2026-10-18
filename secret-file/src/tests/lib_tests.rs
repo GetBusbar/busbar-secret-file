@@ -162,3 +162,48 @@ fn the_declares_section_states_the_disk_need() {
     let d: serde_json::Value = serde_json::from_str(DECLARES).expect("declares.json is JSON");
     assert_eq!(d["disk"], serde_json::Value::Bool(true), "{DECLARES}");
 }
+
+/// A PATH THE OPERATOR GOT WRONG IS A CONFIG ERROR, NOT AN OUTAGE (App. A B.2; the contract's
+/// `SecretErrorKind` taxonomy): a path through a regular file, a symlink loop, a directory, an
+/// over-long or NUL-bearing name read as `Invalid`; only a transient I/O failure is `Unavailable`,
+/// and anything else defaults to the config kind. A symlink loop's kind (`FilesystemLoop`) is not
+/// stable on the pinned toolchain, so it is not named here; it falls to that same default. RED
+/// before the fix: every error that was not not-found or permission-denied read as an outage.
+#[test]
+fn an_io_error_is_classified_config_or_transient_by_its_kind() {
+    use std::io::{Error, ErrorKind};
+    for kind in [
+        ErrorKind::NotADirectory,
+        ErrorKind::IsADirectory,
+        ErrorKind::InvalidFilename,
+        ErrorKind::InvalidInput,
+        ErrorKind::Unsupported,
+    ] {
+        assert_eq!(
+            io_refusal("/p", &Error::from(kind)).kind,
+            SecretErrorKind::Invalid,
+            "{kind:?}"
+        );
+    }
+    for kind in [
+        ErrorKind::Interrupted,
+        ErrorKind::TimedOut,
+        ErrorKind::WouldBlock,
+        ErrorKind::ResourceBusy,
+        ErrorKind::StaleNetworkFileHandle,
+    ] {
+        assert_eq!(
+            io_refusal("/p", &Error::from(kind)).kind,
+            SecretErrorKind::Unavailable,
+            "{kind:?}"
+        );
+    }
+    assert_eq!(
+        io_refusal("/p", &Error::from(ErrorKind::NotFound)).kind,
+        SecretErrorKind::NotFound
+    );
+    assert_eq!(
+        io_refusal("/p", &Error::from(ErrorKind::PermissionDenied)).kind,
+        SecretErrorKind::Denied
+    );
+}

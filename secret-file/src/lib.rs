@@ -72,12 +72,21 @@ fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
 }
 
 /// The refusal an I/O error reads as: its code, and 1.5.5's text naming the path and the cause.
+/// The code is the contract's taxonomy (App. A B.2): a path the operator got wrong (missing, not
+/// permitted, through a regular file, a loop, a directory, an over-long or NUL-bearing name) is a
+/// CONFIG error; only a transient I/O failure is an outage (`Unavailable`), and anything else
+/// defaults to the config kind, never to an outage nobody can wait out.
 fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
+    use std::io::ErrorKind as K;
     let kind = match e.kind() {
-        std::io::ErrorKind::NotFound => SecretErrorKind::NotFound,
-        std::io::ErrorKind::PermissionDenied => SecretErrorKind::Denied,
-        std::io::ErrorKind::Other => SecretErrorKind::Invalid,
-        _ => SecretErrorKind::Unavailable,
+        K::NotFound => SecretErrorKind::NotFound,
+        K::PermissionDenied => SecretErrorKind::Denied,
+        K::Interrupted
+        | K::TimedOut
+        | K::WouldBlock
+        | K::ResourceBusy
+        | K::StaleNetworkFileHandle => SecretErrorKind::Unavailable,
+        _ => SecretErrorKind::Invalid,
     };
     SecretModuleError::new(kind, format!("secret file:{path} cannot resolve: {e}"))
 }
