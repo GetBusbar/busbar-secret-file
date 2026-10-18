@@ -15,8 +15,9 @@
 //! runs its `resolve` on the bounded disk lane, at config time only (THE DESIGN §11.11 R4).
 //!
 //! The missing-path, EMPTY-file and `cannot resolve: <cause>` refusals are 1.5.5's, byte for byte;
-//! the BLANK-file and not-a-regular-file refusals are new in 1.6.0 (registered in busbar's
-//! CHANGELOG). No refusal carries the file's content.
+//! a whitespace-only file resolves to its bytes, as 1.5.5 resolved it. The not-a-regular-file
+//! refusal is new in 1.6.0 (registered in busbar's CHANGELOG). No refusal carries the file's
+//! content.
 
 #![forbid(unsafe_code)]
 
