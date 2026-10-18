@@ -84,8 +84,8 @@ fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
 /// Resolve `settings` (`{ path: PATH }`) to the file's bytes, untouched.
 ///
 /// # Errors
-/// Fail-closed: a missing, unreadable, non-regular, empty or whitespace-only file is
-/// refused, and so is a missing or blank `path`. The text names the path, never the content.
+/// Fail-closed, as 1.5.5: a missing, unreadable or empty file is refused, and so is a missing or
+/// blank `path`; a non-regular file is refused by name. The text names the path, never the content.
 pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretResult<Vec<u8>> {
     let path = match settings
         .get(SECRET_FILE_SETTING_PATH)
@@ -116,17 +116,9 @@ pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretR
             "secret file:{path} resolved to an EMPTY file; a secret must be non-empty \
              (fail-closed)"
         ))),
-        // The `env:` blank rule, in BYTE form: "every byte is ASCII whitespace", NOT "the bytes
-        // decode to a blank string" — a binary secret (a DER key, a raw 32-byte token) is often not
-        // UTF-8 and must keep resolving. Bytes that pass are returned untouched: a PEM chain's
-        // trailing newline is part of the secret.
-        Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => {
-            Err(SecretModuleError::invalid(format!(
-                "secret file:{path} resolved to a BLANK file (whitespace only); a secret must \
-                 carry actual content, and the file DOES exist — fix its contents, not its \
-                 presence (fail-closed)"
-            )))
-        }
+        // Any other content resolves untouched, a whitespace-only file included, as 1.5.5 resolved
+        // it (`resolve_builtin` tested a file only for emptiness): a PEM chain's trailing newline
+        // is part of the secret, and a binary secret need not be UTF-8.
         Ok(bytes) => Ok(bytes),
         Err(e) => Err(io_refusal(path, &e)),
     }
