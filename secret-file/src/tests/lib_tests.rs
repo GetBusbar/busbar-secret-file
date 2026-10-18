@@ -166,15 +166,15 @@ fn the_declares_section_states_the_disk_need() {
 /// A PATH THE OPERATOR GOT WRONG IS A CONFIG ERROR, NOT AN OUTAGE (App. A B.2; the contract's
 /// `SecretErrorKind` taxonomy): a path through a regular file, a symlink loop, a directory, an
 /// over-long or NUL-bearing name read as `Invalid`; only a transient I/O failure is `Unavailable`,
-/// and anything else defaults to the config kind. RED before the fix: every error that was not
-/// not-found or permission-denied read as an outage.
+/// and anything else defaults to the config kind. A symlink loop's kind (`FilesystemLoop`) is not
+/// stable on the pinned toolchain, so it is not named here; it falls to that same default. RED
+/// before the fix: every error that was not not-found or permission-denied read as an outage.
 #[test]
 fn an_io_error_is_classified_config_or_transient_by_its_kind() {
     use std::io::{Error, ErrorKind};
     for kind in [
         ErrorKind::NotADirectory,
         ErrorKind::IsADirectory,
-        ErrorKind::FilesystemLoop,
         ErrorKind::InvalidFilename,
         ErrorKind::InvalidInput,
         ErrorKind::Unsupported,
