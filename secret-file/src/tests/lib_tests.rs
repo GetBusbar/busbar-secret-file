@@ -37,8 +37,12 @@ fn a_file_resolves_byte_for_byte_untrimmed() {
     let _ = std::fs::remove_file(&p);
 }
 
+/// AS 1.5.5 (`crates/busbar/src/config/secret.rs` `resolve_builtin`): an EMPTY file is refused, and
+/// a whitespace-only one RESOLVES, its bytes untouched. 1.5.5 tested a file only for emptiness;
+/// refusing a blank one is a behaviour difference no owner has signed (THE DESIGN §2: the default
+/// is 1.5.5's behaviour). RED before the restore: the blank file was refused.
 #[test]
-fn empty_and_blank_files_are_refused() {
+fn an_empty_file_is_refused_and_a_blank_one_resolves_as_in_1_5_5() {
     let p = temp_path("empty");
     std::fs::write(&p, b"").unwrap();
     let e = resolve(&path(&p)).unwrap_err();
@@ -49,14 +53,12 @@ fn empty_and_blank_files_are_refused() {
             "secret file:{d} resolved to an EMPTY file; a secret must be non-empty (fail-closed)"
         )
     );
-    std::fs::write(&p, b" \n\t").unwrap();
-    let e = resolve(&path(&p)).unwrap_err();
-    assert!(
-        e.message.contains("BLANK file (whitespace only)"),
-        "{}",
-        e.message
-    );
     assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
+    std::fs::write(&p, b" \n\t").unwrap();
+    assert_eq!(
+        resolve(&path(&p)).expect("a blank file resolves, as in 1.5.5"),
+        b" \n\t"
+    );
     let _ = std::fs::remove_file(&p);
 }
 
