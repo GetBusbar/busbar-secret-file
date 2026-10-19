@@ -8,6 +8,9 @@ rust-version = "1.97"
 description = "The file secret source for busbar's kind:secret plugin family, on the secret kind's memory ABI: `{ file: /path }` resolves to the file's bytes, untouched, fail-closed."
 license = "Apache-2.0"
 
+[lints]
+workspace = true
+
 [lib]
 # rlib only: the logic and its door. A build that LINKS this crate registers `door::door` as its
 # row (no symbol is exported from here); the dropped-in cdylib is `busbar-secret-file-plugin`

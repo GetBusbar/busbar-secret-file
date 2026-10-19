@@ -124,6 +124,7 @@ fn json(bytes: &[u8]) -> Blob {
         len: bytes.len(),
         fmt: BLOB_JSON,
         flags: 0,
+        ..Blob::ZERO
     }
 }
 
