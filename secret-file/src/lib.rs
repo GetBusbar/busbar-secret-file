@@ -26,9 +26,15 @@ use busbar_contract::abi::secret::{
     ERROR_KIND_UNAVAILABLE,
 };
 use busbar_contract::secret::{SecretErrorKind, SecretModuleError, SecretResult};
-use busbar_contract::secret_ref::SECRET_FILE_SETTING_PATH;
 
 pub mod door;
+
+/// The word config names this source by: its module alias and its reference sugar
+/// (`{ file: X }`), spelled here, never by the contract (busbar step 2c).
+pub const WORD: &str = "file";
+
+/// The settings key the sugar's value lands under (`{ file: X }` → `settings.path`).
+pub const KEY: &str = "path";
 
 /// The plugin's name (the manifest name).
 pub const NAME: &str = "busbar-secret-file";
@@ -140,7 +146,7 @@ fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
 /// blank `path`; a non-regular file is refused by name. The text names the path, never the content.
 pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretResult<Vec<u8>> {
     let path = match settings
-        .get(SECRET_FILE_SETTING_PATH)
+        .get(KEY)
         .and_then(|v| v.as_str())
     {
         Some(p) if !p.trim().is_empty() => p,
