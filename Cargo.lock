@@ -90,6 +90,7 @@ dependencies = [
  "busbar-contract",
  "libc",
  "serde_json",
+ "zeroize",
 ]
 
 [[package]]

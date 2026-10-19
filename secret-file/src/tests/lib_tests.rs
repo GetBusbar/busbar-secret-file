@@ -98,7 +98,7 @@ fn the_opened_handle_is_checked_not_only_the_path() {
     let e = read_file("/dev/zero").unwrap_err();
     assert_eq!(
         e.to_string(),
-        "'/dev/zero' is not a regular file (it is a device node, socket, or fifo); a `file:` \
+        "'/dev/zero' is not a regular file (it is a device node or fifo); a `file:` \
          secret must name a regular file holding the credential bytes (fail-closed)"
     );
     assert_eq!(e.kind(), std::io::ErrorKind::Other);

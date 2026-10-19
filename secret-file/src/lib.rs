@@ -42,13 +42,14 @@ pub const DECLARES: &str = include_str!("../declares.json");
 /// What a path that is not a regular file is refused as (an `Other` error, so [`io_refusal`] makes
 /// it `Invalid`, and its text follows `cannot resolve: `). A directory `open()`s fine on Unix and
 /// fails only at read time with a bare errno ("Is a directory"), which does not tell an operator
-/// they pointed the credential at a folder; a fifo opens and then BLOCKS until a writer appears; a
-/// device node such as `/dev/zero` never ends.
+/// they pointed the credential at a folder; a fifo would BLOCK a blocking open until a writer
+/// appears; a device node such as `/dev/zero` never ends. (A unix socket does not open at all: it
+/// is refused by the open's own error.)
 fn not_regular(path: &str, md: &std::fs::Metadata) -> std::io::Error {
     let kind = if md.is_dir() {
         "a directory"
     } else {
-        "a device node, socket, or fifo"
+        "a device node or fifo"
     };
     std::io::Error::other(format!(
         "'{path}' is not a regular file (it is {kind}); a `file:` secret must name a regular file \
@@ -59,26 +60,52 @@ fn not_regular(path: &str, md: &std::fs::Metadata) -> std::io::Error {
 /// Read `path` whole, as 1.5.5 read it (`std::fs::read`), once the OPENED handle is a regular
 /// file: the type is judged on what was opened (its `fstat`), not on whatever the path named
 /// before the open. On unix the open is NON-BLOCKING, so a fifo (which a blocking open waits on
-/// until a writer appears) is opened at once and refused here; a regular file reads the same
-/// either way.
+/// until a writer appears) is opened at once and refused here, and NO-CTTY, so a terminal device
+/// never becomes the process's controlling terminal before it is refused; a regular file reads
+/// the same either way.
+///
+/// THE BYTES ARE WIPED on every path but the one that hands them back (THE DESIGN §6: auth
+/// material is zeroised): they are read into a wiped buffer sized from the handle's length, a
+/// file that grows mid-read moves into a larger wiped buffer (the old one wiped as it goes), and
+/// an I/O error mid-read drops what was read wiped.
 fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
+    use zeroize::Zeroizing;
 
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK);
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
     }
     let mut file = options.open(path)?;
     let md = file.metadata()?;
     if !md.is_file() {
         return Err(not_regular(path, &md));
     }
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf)?;
-    Ok(buf)
+    let len = usize::try_from(md.len()).unwrap_or(usize::MAX);
+    let mut buf = Zeroizing::new(Vec::with_capacity(len.saturating_add(1)));
+    let mut chunk = Zeroizing::new([0_u8; 8192]);
+    loop {
+        // An interrupted read is retried, as `read_to_end` retried it.
+        let n = match file.read(&mut chunk[..]) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            r => r?,
+        };
+        if n == 0 {
+            break;
+        }
+        if buf.len() + n > buf.capacity() {
+            // Grown past its length: a larger wiped buffer takes the bytes, and the old one is
+            // wiped as it drops.
+            let mut bigger = Zeroizing::new(Vec::with_capacity((buf.len() + n).saturating_mul(2)));
+            bigger.extend_from_slice(&buf);
+            buf = bigger;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    Ok(std::mem::take(&mut *buf))
 }
 
 /// The refusal an I/O error reads as: its code, and 1.5.5's text naming the path and the cause.
