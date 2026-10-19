@@ -84,8 +84,12 @@ fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
     if !md.is_file() {
         return Err(not_regular(path, &md));
     }
+    // FALLIBLE, as 1.5.5's `std::fs::read` reserved (`try_reserve_exact`): a length no allocation
+    // can hold (a huge or sparse file named as a secret) is refused with the allocator's error,
+    // never an abort of the process.
     let len = usize::try_from(md.len()).unwrap_or(usize::MAX);
-    let mut buf = Zeroizing::new(Vec::with_capacity(len.saturating_add(1)));
+    let mut buf = Zeroizing::new(Vec::new());
+    buf.try_reserve_exact(len.saturating_add(1))?;
     let mut chunk = Zeroizing::new([0_u8; 8192]);
     loop {
         // An interrupted read is retried, as `read_to_end` retried it.
@@ -99,7 +103,8 @@ fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
         if buf.len() + n > buf.capacity() {
             // Grown past its length: a larger wiped buffer takes the bytes, and the old one is
             // wiped as it drops.
-            let mut bigger = Zeroizing::new(Vec::with_capacity((buf.len() + n).saturating_mul(2)));
+            let mut bigger = Zeroizing::new(Vec::new());
+            bigger.try_reserve_exact((buf.len() + n).saturating_mul(2))?;
             bigger.extend_from_slice(&buf);
             buf = bigger;
         }
