@@ -104,6 +104,33 @@ fn the_opened_handle_is_checked_not_only_the_path() {
     assert_eq!(e.kind(), std::io::ErrorKind::Other);
 }
 
+/// RED (Q128 secret-file LOW): the open itself never blocks on a fifo. The handle is opened
+/// non-blocking and its type judged on the handle, so a path that is a fifo when it is opened (one
+/// swapped in after any path check) is refused at once, never waited on for a writer. RED before
+/// the fix: `read_file` opened the fifo blocking and hung until a writer appeared.
+#[cfg(unix)]
+#[test]
+fn a_fifo_is_refused_at_once_never_waited_on() {
+    let fifo = temp_path("fifo");
+    let _ = std::fs::remove_file(&fifo);
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "mkfifo made the fifo");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let at = fifo.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(read_file(at.to_str().unwrap()).map(|_| ()));
+    });
+    let answered = rx.recv_timeout(std::time::Duration::from_secs(5));
+    let _ = std::fs::remove_file(&fifo);
+    let e = answered
+        .expect("the open answered without waiting for a writer")
+        .expect_err("a fifo is refused");
+    assert!(e.to_string().contains("is not a regular file"), "{e}");
+}
+
 #[test]
 fn a_directory_is_refused_as_not_a_regular_file() {
     let d = temp_path("dir");
