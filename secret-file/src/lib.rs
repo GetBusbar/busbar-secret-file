@@ -57,11 +57,21 @@ fn not_regular(path: &str, md: &std::fs::Metadata) -> std::io::Error {
 }
 
 /// Read `path` whole, as 1.5.5 read it (`std::fs::read`), once the OPENED handle is a regular
-/// file: the type is judged on what was opened, not on whatever the path named before the open.
+/// file: the type is judged on what was opened (its `fstat`), not on whatever the path named
+/// before the open. On unix the open is NON-BLOCKING, so a fifo (which a blocking open waits on
+/// until a writer appears) is opened at once and refused here; a regular file reads the same
+/// either way.
 fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
 
-    let mut file = std::fs::File::open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let mut file = options.open(path)?;
     let md = file.metadata()?;
     if !md.is_file() {
         return Err(not_regular(path, &md));
@@ -109,18 +119,10 @@ pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretR
             ))
         }
     };
-    // A path-shaped source must name a REGULAR FILE ([`not_regular`]), judged here on the path
-    // before the open so a fifo is never opened (an open of one blocks until a writer appears), and
-    // again on the opened handle ([`read_file`]). `fs::metadata` FOLLOWS symlinks, which is
-    // required: Kubernetes projects every secret as a symlink into a `..data/` directory.
-    //
-    // A metadata error is deliberately NOT handled here — a missing or unreadable path falls
-    // through to the read below so it keeps its "cannot resolve: <cause>" message.
-    if let Ok(md) = std::fs::metadata(path) {
-        if !md.is_file() {
-            return Err(io_refusal(path, &not_regular(path, &md)));
-        }
-    }
+    // A path-shaped source must name a REGULAR FILE ([`not_regular`]), judged on the OPENED handle
+    // ([`read_file`], opened non-blocking so a fifo is never waited on): one open, one judgement,
+    // with no path lookup before it a swapped path could slip past. The open FOLLOWS symlinks,
+    // which is required: Kubernetes projects every secret as a symlink into a `..data/` directory.
     match read_file(path) {
         Ok(bytes) if bytes.is_empty() => Err(SecretModuleError::invalid(format!(
             "secret file:{path} resolved to an EMPTY file; a secret must be non-empty \

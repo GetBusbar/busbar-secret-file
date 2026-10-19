@@ -88,6 +88,7 @@ name = "busbar-secret-file"
 version = "1.0.0"
 dependencies = [
  "busbar-contract",
+ "libc",
  "serde_json",
 ]
 
