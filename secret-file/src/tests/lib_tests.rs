@@ -234,3 +234,20 @@ fn an_io_error_is_classified_config_or_transient_by_its_kind() {
         SecretErrorKind::Denied
     );
 }
+
+/// RED (Q128 secret-file, reader B on fcf42d8): a file whose reported length no allocation can
+/// hold (a sparse 8 TiB file, past any CI host under Linux's default overcommit heuristic) is
+/// REFUSED with the allocator's out-of-memory error, as 1.5.5's `std::fs::read` refused it through
+/// its fallible reservation; it never aborts the process. RED before the fix: the buffer was
+/// pre-sized infallibly from the length, and the test process aborted.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_length_no_allocation_can_hold_is_refused_not_an_abort() {
+    let at = temp_path("huge");
+    let file = std::fs::File::create(&at).unwrap();
+    file.set_len(1 << 43).expect("a sparse file of that length");
+    drop(file);
+    let e = read_file(at.to_str().unwrap()).unwrap_err();
+    std::fs::remove_file(&at).ok();
+    assert_eq!(e.kind(), std::io::ErrorKind::OutOfMemory, "{e}");
+}
