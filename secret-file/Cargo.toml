@@ -18,6 +18,8 @@ crate-type = ["rlib"]
 # The ONE busbar crate a plugin names (#40: contract only), pinned by git rev to `.busbar-ref`.
 busbar-contract = { workspace = true }
 serde_json = { workspace = true }
+# The read buffer is wiped on every path but the one that hands the bytes back (THE DESIGN §6).
+zeroize = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 # `O_NONBLOCK` for the one open (`read_file`): a fifo's open never waits for a writer.
