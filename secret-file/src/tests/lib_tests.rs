@@ -186,6 +186,7 @@ fn settings_that_are_not_an_object_are_invalid() {
 /// stated only its contract range, and the host resolved this source on a request path.
 #[test]
 fn the_declares_section_states_the_disk_need() {
+    const DECLARES: &str = include_str!("../../declares.json");
     let d: serde_json::Value = serde_json::from_str(DECLARES).expect("declares.json is JSON");
     assert_eq!(d["disk"], serde_json::Value::Bool(true), "{DECLARES}");
 }

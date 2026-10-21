@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE `file` SECRET SOURCE for busbar's `kind: secret` plugin family, on the secret kind's memory
-//! ABI (`busbar_contract::abi::secret`). This crate is the LOGIC and its door ([`door::door`]); the
+//! ABI (`busbar_contract::abi::secret`). This crate is the LOGIC and its door ([`door`]); the
 //! dropped-in `cdylib` is the sibling `busbar-secret-file-plugin` crate, which exports the same door
 //! as `busbar_plugin_door`.
 //!
@@ -11,7 +11,7 @@
 //!
 //! It is an ordinary plugin (THE DESIGN §2): linked in the default build or dropped in, called
 //! through the secret kind table by the one dispatcher, and loaded only when a reference names it.
-//! It reads the local disk, so its declares document ([`DECLARES`]) states the disk need: the host
+//! It reads the local disk, so its declares document (`declares.json`, carried on the door's Statement) states the disk need: the host
 //! runs its `resolve` on the bounded disk lane, at config time only (THE DESIGN §11.11 R4).
 //!
 //! The missing-path, EMPTY-file and `cannot resolve: <cause>` refusals are 1.5.5's, byte for byte;
@@ -27,23 +27,20 @@ use busbar_contract::abi::secret::{
 };
 use busbar_contract::secret::{SecretErrorKind, SecretModuleError, SecretResult};
 
-pub mod door;
+mod door;
+
+/// THE DOOR: this plugin's one public item (BUSBAR-1.6.0.md l.3567, Crate shape).
+pub use door::door;
 
 /// The word config names this source by: its module alias and its reference sugar
 /// (`{ file: X }`), spelled here, never by the contract (busbar step 2c).
-pub const WORD: &str = "file";
+const WORD: &str = "file";
 
 /// The settings key the sugar's value lands under (`{ file: X }` → `settings.path`).
-pub const KEY: &str = "path";
+const KEY: &str = "path";
 
 /// The plugin's name (the manifest name).
-pub const NAME: &str = "busbar-secret-file";
-
-/// THE PLUGIN'S `declares` SECTION (its `declares.json`), as a linked build reads it beside a
-/// dropped-in copy's signed one: this source reads the disk (`"disk": true`), so the host resolves
-/// it only at config time, on its bounded disk lane, never from a request path (busbar
-/// `BUSBAR-1.6.0.md` l.1464-1469, R4, OWNER 2026-10-13).
-pub const DECLARES: &str = include_str!("../declares.json");
+const NAME: &str = "busbar-secret-file";
 
 /// What a path that is not a regular file is refused as (an `Other` error, so [`io_refusal`] makes
 /// it `Invalid`, and its text follows `cannot resolve: `). A directory `open()`s fine on Unix and
@@ -144,7 +141,7 @@ fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
 /// # Errors
 /// Fail-closed, as 1.5.5: a missing, unreadable or empty file is refused, and so is a missing or
 /// blank `path`; a non-regular file is refused by name. The text names the path, never the content.
-pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretResult<Vec<u8>> {
+fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretResult<Vec<u8>> {
     let path = match settings.get(KEY).and_then(|v| v.as_str()) {
         Some(p) if !p.trim().is_empty() => p,
         _ => {
@@ -175,7 +172,7 @@ pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretR
 ///
 /// # Errors
 /// The bytes are not a JSON object.
-pub fn settings_of(bytes: &[u8]) -> SecretResult<serde_json::Map<String, serde_json::Value>> {
+fn settings_of(bytes: &[u8]) -> SecretResult<serde_json::Map<String, serde_json::Value>> {
     if bytes.is_empty() {
         return Ok(serde_json::Map::new());
     }
@@ -186,7 +183,7 @@ pub fn settings_of(bytes: &[u8]) -> SecretResult<serde_json::Map<String, serde_j
 
 /// The `abi::secret::ERROR_KIND_*` code of a [`SecretErrorKind`].
 #[must_use]
-pub const fn error_kind(kind: SecretErrorKind) -> u32 {
+const fn error_kind(kind: SecretErrorKind) -> u32 {
     match kind {
         SecretErrorKind::NotFound => ERROR_KIND_NOT_FOUND,
         SecretErrorKind::Unavailable => ERROR_KIND_UNAVAILABLE,

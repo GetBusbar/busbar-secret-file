@@ -6,13 +6,19 @@
 //! host runs its `resolve` on the bounded disk lane by, at config time only. Read through the
 //! loader's ONE reader of a declares document, at the busbar commit this repo pins.
 
+use busbar_plugin_loader::dispatch::LinkedRow;
 use busbar_plugin_loader::sign::Declares;
 
 /// RED (audit pinned secret-file #1): the declares document states the disk need.
 #[test]
 fn the_declares_document_states_the_disk_need() {
-    let declares = Declares::from_declares_json(include_bytes!("../../secret-file/declares.json"))
-        .expect("the declares document reads");
+    let row = LinkedRow::of(busbar_secret_file::door).expect("the linked door states its Statement");
+    let read = busbar_contract::abi::mechanism::rendering::read(&row.statement)
+        .expect("the Statement rendering reads back");
+    let document = busbar_contract::abi::mechanism::extensions::declares(&read.extensions.bytes)
+        .expect("the Statement carries the declares document");
+    assert_eq!(document, &include_bytes!("../../secret-file/declares.json")[..]);
+    let declares = Declares::from_declares_json(document).expect("the declares document reads");
     assert!(
         declares.disk,
         "the file source reads the disk: its declares document must state `disk`"

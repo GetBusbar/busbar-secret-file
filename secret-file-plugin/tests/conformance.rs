@@ -110,7 +110,7 @@ fn bind(d: &Dispatcher) -> Bind {
 }
 
 fn linked(d: &Dispatcher) -> Plugin<Secret> {
-    let row = LinkedRow::of(busbar_secret_file::door::door).expect("the linked row states");
+    let row = LinkedRow::of(busbar_secret_file::door).expect("the linked row states");
     load_linked::<Secret>(&row, bind(d)).expect("the linked door loads")
 }
 
@@ -290,7 +290,7 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
     let (set, empty, unset) = fixtures();
     assert_eq!(std::fs::read(&set).unwrap(), VALUE.as_bytes());
     assert_eq!(
-        LinkedRow::of(busbar_secret_file::door::door)
+        LinkedRow::of(busbar_secret_file::door)
             .expect("the linked row states")
             .statement,
         stated(),
@@ -329,7 +329,7 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
     let dropped_in = transcript(&dropped(&d));
     assert_eq!(linked, dropped_in, "the two doors are not one plugin");
 
-    assert_eq!(linked["name"], busbar_secret_file::NAME);
+    assert_eq!(linked["name"], "busbar-secret-file");
     assert_eq!(linked["kind"], "Secret");
     assert_eq!(linked["max_inflight"], 16);
     assert_eq!(
@@ -381,7 +381,7 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
 #[test]
 fn a_wrong_kind_is_refused() {
     let d = dispatcher();
-    let row = LinkedRow::of(busbar_secret_file::door::door).expect("the linked row states");
+    let row = LinkedRow::of(busbar_secret_file::door).expect("the linked row states");
     let err =
         load_linked::<Export>(&row, bind(&d)).expect_err("a secret door is not an export door");
     let said = format!("{err:?}");
@@ -434,7 +434,7 @@ fn a_statement_mismatch_is_refused() {
 // script's pin, the two folds equal, and the suite's RED arms kept. `plugin-ci.yml` runs it under
 // `--release`.
 busbar_plugin_loader::conformance_suite! {
-    door: busbar_secret_file::door::door,
+    door: busbar_secret_file::door,
     cdylib: "busbar_secret_file_plugin",
     inputs: include_str!("conformance.json"),
 }
