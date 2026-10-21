@@ -309,10 +309,20 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
             (
                 busbar_contract::abi::mechanism::door::REWRITE_SUGAR,
                 "file".to_string(),
-                String::new()
+                "path".to_string()
+            ),
+            (
+                busbar_contract::abi::mechanism::door::REWRITE_SUGAR_NAMES,
+                "file".to_string(),
+                "the file to read".to_string()
+            ),
+            (
+                busbar_contract::abi::mechanism::door::REWRITE_SUGAR_ROLE,
+                "file".to_string(),
+                "path".to_string()
             ),
         ],
-        "the Statement names the source by its module alias and its reference sugar"
+        "the Statement names the source by its module alias and its reference sugar, the settings key that sugar's value lands under, what a refusal says it names and its role"
     );
     let d = dispatcher();
     let linked = transcript(&linked(&d));
