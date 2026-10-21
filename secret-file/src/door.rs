@@ -45,12 +45,22 @@ const REWRITES: &[Rewrite] = &[
     rewrite(REWRITE_SUGAR_ROLE, "path"),
 ];
 
-/// This plugin's Statement: its name, version, the most resolves one instance holds in flight, and
-/// the names config gives it.
-pub const STATEMENT: Statement = Statement {
-    rewrites: REWRITES.as_ptr(),
-    rewrites_len: REWRITES.len(),
-    ..statement(crate::NAME, env!("CARGO_PKG_VERSION"), 16)
+busbar_contract::statement_extensions!(
+    /// The Statement's extensions: this plugin's whole `declares` document (BUSBAR-1.6.0.md l.246).
+    /// This source reads the disk (`"disk": true`), so the host resolves it only at config time, on
+    /// its bounded disk lane, never from a request path (l.1464-1469, R4, OWNER 2026-10-13).
+    EXTENSIONS: [(
+        busbar_contract::abi::mechanism::extensions::EXT_DECLARES,
+        include_bytes!("../declares.json")
+    )]
+);
+
+/// This plugin's Statement: its name, version, the most resolves one instance holds in flight, the
+/// names config gives it, and its `declares` document.
+const STATEMENT: Statement = {
+    let mut s = statement(crate::NAME, env!("CARGO_PKG_VERSION"), 16).with_rewrites(REWRITES);
+    s.extensions = EXTENSIONS;
+    s
 };
 
 /// One instance: every reference names its own path, so there is nothing to hold.
@@ -84,7 +94,7 @@ impl SafeSlot for Resolve {
         let Some(held) = instance.get() else {
             return Outcome::Refused;
         };
-        let settings = input.field(|i| &i.settings).bytes();
+        let settings = input.settings().bytes();
         match settings_of(settings).and_then(|s| crate::resolve(&s)) {
             Ok(material) => {
                 out.lease_secret(|o| &o.secret, held.leases(), material, BLOB_OCTETS);
@@ -109,4 +119,4 @@ mod table {
 }
 
 /// This plugin's door: the one a compiled-in build links and the dropped-in image exports.
-pub use table::{door, MACRO_DOOR};
+pub use table::door;
