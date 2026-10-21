@@ -47,11 +47,8 @@ const REWRITES: &[Rewrite] = &[
 
 /// This plugin's Statement: its name, version, the most resolves one instance holds in flight, and
 /// the names config gives it.
-pub const STATEMENT: Statement = Statement {
-    rewrites: REWRITES.as_ptr(),
-    rewrites_len: REWRITES.len(),
-    ..statement(crate::NAME, env!("CARGO_PKG_VERSION"), 16)
-};
+pub const STATEMENT: Statement =
+    statement(crate::NAME, env!("CARGO_PKG_VERSION"), 16).with_rewrites(REWRITES);
 
 /// One instance: every reference names its own path, so there is nothing to hold.
 #[derive(Debug)]
@@ -84,7 +81,7 @@ impl SafeSlot for Resolve {
         let Some(held) = instance.get() else {
             return Outcome::Refused;
         };
-        let settings = input.field(|i| &i.settings).bytes();
+        let settings = input.settings().bytes();
         match settings_of(settings).and_then(|s| crate::resolve(&s)) {
             Ok(material) => {
                 out.lease_secret(|o| &o.secret, held.leases(), material, BLOB_OCTETS);
