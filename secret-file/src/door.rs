@@ -51,7 +51,7 @@ busbar_contract::statement_extensions!(
     /// its bounded disk lane, never from a request path (l.1464-1469, R4, OWNER 2026-10-13).
     EXTENSIONS: [(
         busbar_contract::abi::mechanism::extensions::EXT_DECLARES,
-        include_bytes!("../declares.json"),
+        include_bytes!("../declares.json")
     )]
 );
 
