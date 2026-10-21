@@ -201,7 +201,7 @@ fn resolve(p: &Plugin<Secret>, settings: &str) -> String {
     );
     let c = p.call(secret::slot::RESOLVE, &mut f);
     let blob = f.out.secret;
-    let material = if blob.ptr().is_null() || blob.len() == 0 {
+    let material = if blob.ptr().is_null() || blob.is_empty() {
         String::new()
     } else {
         // SAFETY: a READY resolve's `secret` names plugin memory held under the answer's lease
