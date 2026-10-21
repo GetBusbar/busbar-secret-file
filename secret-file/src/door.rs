@@ -57,9 +57,10 @@ busbar_contract::statement_extensions!(
 
 /// This plugin's Statement: its name, version, the most resolves one instance holds in flight, the
 /// names config gives it, and its `declares` document.
-const STATEMENT: Statement = Statement {
-    extensions: EXTENSIONS,
-    ..statement(crate::NAME, env!("CARGO_PKG_VERSION"), 16).with_rewrites(REWRITES)
+const STATEMENT: Statement = {
+    let mut s = statement(crate::NAME, env!("CARGO_PKG_VERSION"), 16).with_rewrites(REWRITES);
+    s.extensions = EXTENSIONS;
+    s
 };
 
 /// One instance: every reference names its own path, so there is nothing to hold.
