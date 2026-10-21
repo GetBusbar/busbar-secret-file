@@ -13,7 +13,8 @@ use busbar_plugin_loader::dispatch::LinkedRow;
 
 /// The rewrites the linked door's Statement states, `(class, from, to)`.
 fn rewrites() -> Vec<(u32, String, String)> {
-    let row = LinkedRow::of(busbar_secret_file::door::door).expect("the linked door states its Statement");
+    let row = LinkedRow::of(busbar_secret_file::door::door)
+        .expect("the linked door states its Statement");
     read(&row.statement)
         .expect("the Statement rendering reads back")
         .rewrites
@@ -24,7 +25,7 @@ fn the_statement_declares_its_shorthand_and_the_settings_key_it_lands_under() {
     let r = rewrites();
     assert!(
         r.contains(&(REWRITE_SUGAR, "file".to_string(), "path".to_string())),
-        "the `{ file: X }` shorthand must state its settings key `path`: {r:?}"
+        "the `{{ file: X }}` shorthand must state its settings key `path`: {r:?}"
     );
 }
 
@@ -37,6 +38,6 @@ fn the_statement_declares_what_the_shorthand_value_names() {
             "file".to_string(),
             "the file to read".to_string()
         )),
-        "the `{ file: X }` shorthand must state what its value names: {r:?}"
+        "the `{{ file: X }}` shorthand must state what its value names: {r:?}"
     );
 }
