@@ -9,12 +9,18 @@
 
 use busbar_contract::abi::mechanism::door::{REWRITE_SUGAR, REWRITE_SUGAR_NAMES};
 use busbar_contract::abi::mechanism::rendering::read;
-use busbar_plugin_loader::dispatch::LinkedRow;
+use busbar_plugin_loader::dispatch::{LinkedRow, LoadedDoor};
+
+/// This crate's own door, as the loader names a compiled-in one.
+#[allow(unused_unsafe)]
+fn loaded() -> LoadedDoor {
+    // SAFETY: `door` is this crate's own `plugin_door!` entry.
+    unsafe { LoadedDoor::from_raw(busbar_secret_file::door) }
+}
 
 /// The rewrites the linked door's Statement states, `(class, from, to)`.
 fn rewrites() -> Vec<(u32, String, String)> {
-    let row =
-        LinkedRow::of(busbar_secret_file::door).expect("the linked door states its Statement");
+    let row = LinkedRow::of_loaded(loaded()).expect("the linked door states its Statement");
     read(&row.statement)
         .expect("the Statement rendering reads back")
         .rewrites
