@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE DOOR: the `file` source on the secret kind's table (`busbar_contract::abi::secret`), the nine
-//! lifecycle slots the SDK's generic lifecycle (`lifecycle: life(File)`, [`Life`]) and `resolve` a
-//! [`SafeSlot`] — no `unsafe` in this crate.
+//! THE DOOR: the `file` source on the secret kind's table (`busbar_contract::abi::secret`). The nine
+//! lifecycle slots are the SDK's generic lifecycle (`lifecycle: life(File)`, [`Life`]) and
+//! `resolve` is a [`SafeSlot`] — no `unsafe` in this crate.
 //!
 //! * `validate`, `open`, `refresh` — the source holds no settings and no state: any settings object
 //!   opens it.
