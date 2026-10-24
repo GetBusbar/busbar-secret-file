@@ -196,6 +196,9 @@ fn the_declares_section_states_the_disk_need() {
 /// and anything else defaults to the config kind. A symlink loop's kind (`FilesystemLoop`) is not
 /// stable on the pinned toolchain, so it is not named here; it falls to that same default. RED
 /// before the fix: every error that was not not-found or permission-denied read as an outage.
+/// RED before the fix: a network outage (`NetworkDown`, `NetworkUnreachable`, `HostUnreachable`,
+/// `ConnectionReset`, `ConnectionAborted`, `NotConnected`) or descriptor exhaustion (`EMFILE`,
+/// `ENFILE`) reading the file read as a config error ("the settings blob is malformed").
 #[test]
 fn an_io_error_is_classified_config_or_transient_by_its_kind() {
     use std::io::{Error, ErrorKind};
@@ -218,12 +221,28 @@ fn an_io_error_is_classified_config_or_transient_by_its_kind() {
         ErrorKind::WouldBlock,
         ErrorKind::ResourceBusy,
         ErrorKind::StaleNetworkFileHandle,
+        ErrorKind::NetworkDown,
+        ErrorKind::NetworkUnreachable,
+        ErrorKind::HostUnreachable,
+        ErrorKind::ConnectionReset,
+        ErrorKind::ConnectionAborted,
+        ErrorKind::NotConnected,
     ] {
         assert_eq!(
             io_refusal("/p", &Error::from(kind)).kind,
             SecretErrorKind::Unavailable,
             "{kind:?}"
         );
+    }
+    #[cfg(unix)]
+    {
+        for errno in [libc::EMFILE, libc::ENFILE] {
+            assert_eq!(
+                io_refusal("/p", &Error::from_raw_os_error(errno)).kind,
+                SecretErrorKind::Unavailable,
+                "errno {errno}"
+            );
+        }
     }
     assert_eq!(
         io_refusal("/p", &Error::from(ErrorKind::NotFound)).kind,
