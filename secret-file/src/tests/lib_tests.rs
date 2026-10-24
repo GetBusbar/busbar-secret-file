@@ -89,12 +89,13 @@ fn a_large_file_resolves_whole_as_1_5_5_read_it() {
     let _ = std::fs::remove_file(&p);
 }
 
-/// RED (audit pinned secret-file #3): the regular-file rule holds on the OPENED handle, not only on
-/// the path checked before the open, so a path that names a device node by the time it is opened
-/// is refused in the registered words and never read.
+/// RED (audit pinned secret-file #3): a device node (`/dev/zero`, which never ends) is refused in
+/// the registered words and never read. This pins the refusal and its text only: a check of the
+/// path before the open would refuse it alike, so it does not by itself prove the type is judged
+/// on the OPENED handle (no test here swaps a path between a check and the open).
 #[cfg(unix)]
 #[test]
-fn the_opened_handle_is_checked_not_only_the_path() {
+fn a_device_node_is_refused_and_never_read() {
     let e = read_file("/dev/zero").unwrap_err();
     assert_eq!(
         e.to_string(),
@@ -250,4 +251,50 @@ fn a_length_no_allocation_can_hold_is_refused_not_an_abort() {
     let e = read_file(at.to_str().unwrap()).unwrap_err();
     std::fs::remove_file(&at).ok();
     assert_eq!(e.kind(), std::io::ErrorKind::OutOfMemory, "{e}");
+}
+
+/// RED (codeaudit secret-file #2): a regular file whose `fstat` length UNDER-STATES its content (a
+/// procfs file states 0, as a file growing mid-read outruns its length) resolves whole: the read
+/// outgrows the buffer sized from the length more than once, and every byte read before a growth
+/// is carried into the larger buffer. Read off a child whose command line is known byte for byte.
+/// RED with the carry (`bigger.extend_from_slice(&buf)`) removed: the bytes read before the second
+/// growth were lost, and the secret came back truncated with no error.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_longer_than_its_stated_length_resolves_whole() {
+    let long = "x".repeat(40 * 1024);
+    let argv = ["/bin/sh", "-c", "while :; do sleep 1; done", "sh", &long];
+    let mut expected = Vec::new();
+    for arg in argv {
+        expected.extend_from_slice(arg.as_bytes());
+        expected.push(0);
+    }
+    let mut child = std::process::Command::new(argv[0])
+        .args(&argv[1..])
+        .spawn()
+        .expect("sh runs");
+    let at = std::path::PathBuf::from(format!("/proc/{}/cmdline", child.id()));
+    // The child's argv is in place only once its exec has set it up (`spawn` returns as the exec
+    // begins); until then its cmdline reads empty.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::fs::read(&at).map_or(true, |b| b != expected) && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let stated = std::fs::metadata(&at).map(|m| (m.is_file(), m.len()));
+    let read = resolve(&path(&at));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(
+        stated.expect("the child's cmdline"),
+        (true, 0),
+        "a regular file stating length 0"
+    );
+    let read = read.expect("the cmdline resolves");
+    assert_eq!(
+        read.len(),
+        expected.len(),
+        "resolved whole, nothing dropped"
+    );
+    assert!(read == expected, "resolved byte for byte");
 }
