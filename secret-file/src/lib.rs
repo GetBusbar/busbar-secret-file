@@ -16,8 +16,9 @@
 //!
 //! The missing-path, EMPTY-file and `cannot resolve: <cause>` refusals are 1.5.5's, byte for byte;
 //! a whitespace-only file resolves to its bytes, as 1.5.5 resolved it. The not-a-regular-file
-//! refusal is new in 1.6.0 (registered in busbar's CHANGELOG). No refusal carries the file's
-//! content.
+//! refusal is new in 1.6.0 (registered in busbar's CHANGELOG), and so are the refusals of a
+//! reference naming a setting other than `path` and of instance settings, which this source takes
+//! none of ([`instance_settings`]). No refusal carries the file's content.
 
 #![forbid(unsafe_code)]
 
@@ -51,14 +52,15 @@ pub const DECLARES: &str = include_str!("../declares.json");
 /// they pointed the credential at a folder; a fifo would BLOCK a blocking open until a writer
 /// appears; a device node such as `/dev/zero` never ends. (A unix socket does not open at all: it
 /// is refused by the open's own error.)
-fn not_regular(path: &str, md: &std::fs::Metadata) -> std::io::Error {
+/// The path is not repeated here: [`io_refusal`] names it once, before `cannot resolve: `.
+fn not_regular(md: &std::fs::Metadata) -> std::io::Error {
     let kind = if md.is_dir() {
         "a directory"
     } else {
         "a device node or fifo"
     };
     std::io::Error::other(format!(
-        "'{path}' is not a regular file (it is {kind}); a `file:` secret must name a regular file \
+        "the path is not a regular file (it is {kind}); a `file:` secret must name a regular file \
          holding the credential bytes (fail-closed)"
     ))
 }
@@ -88,7 +90,7 @@ fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
     let mut file = options.open(path)?;
     let md = file.metadata()?;
     if !md.is_file() {
-        return Err(not_regular(path, &md));
+        return Err(not_regular(&md));
     }
     // FALLIBLE, as 1.5.5's `std::fs::read` reserved (`try_reserve_exact`): a length no allocation
     // can hold (a huge or sparse file named as a secret) is refused with the allocator's error,
@@ -155,7 +157,8 @@ fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
 ///
 /// # Errors
 /// Fail-closed, as 1.5.5: a missing, unreadable or empty file is refused, and so is a missing or
-/// blank `path`; a non-regular file is refused by name. The text names the path, never the content.
+/// blank `path`; a non-regular file is refused by name, and so is a reference naming any setting
+/// but `path`. The text names the path, never the content.
 pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretResult<Vec<u8>> {
     let path = match settings.get(KEY).and_then(|v| v.as_str()) {
         Some(p) if !p.trim().is_empty() => p,
@@ -166,6 +169,12 @@ pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretR
             ))
         }
     };
+    if let Some(other) = settings.keys().find(|k| k.as_str() != KEY) {
+        return Err(SecretModuleError::invalid(format!(
+            "secret module 'file' does not take settings.{other}; a reference names only \
+             settings.path (fail-closed)"
+        )));
+    }
     // A path-shaped source must name a REGULAR FILE ([`not_regular`]), judged on the OPENED handle
     // ([`read_file`], opened non-blocking so a fifo is never waited on): one open, one judgement,
     // with no path lookup before it a swapped path could slip past. The open FOLLOWS symlinks,
@@ -180,6 +189,28 @@ pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretR
         // is part of the secret, and a binary secret need not be UTF-8.
         Ok(bytes) => Ok(bytes),
         Err(e) => Err(io_refusal(path, &e)),
+    }
+}
+
+/// The instance settings (`secrets.file.settings`) as this source takes them: none. Empty bytes or
+/// an empty object open it; anything else is refused naming why, at `validate`, `open` and
+/// `refresh` alike, rather than ignored.
+///
+/// # Errors
+/// The settings are not a JSON object, or name a setting.
+pub fn instance_settings(bytes: &[u8]) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Ok(serde_json::Value::Object(m)) => match m.keys().next() {
+            None => Ok(()),
+            Some(k) => Err(format!(
+                "secret module 'file' takes no settings; remove settings.{k} (each reference \
+                 names its file in its own settings.path)"
+            )),
+        },
+        _ => Err("settings: must be a JSON object".to_string()),
     }
 }
 
