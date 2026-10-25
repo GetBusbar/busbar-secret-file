@@ -99,7 +99,7 @@ fn a_device_node_is_refused_and_never_read() {
     let e = read_file("/dev/zero").unwrap_err();
     assert_eq!(
         e.to_string(),
-        "'/dev/zero' is not a regular file (it is a device node or fifo); a `file:` \
+        "the path is not a regular file (it is a device node or fifo); a `file:` \
          secret must name a regular file holding the credential bytes (fail-closed)"
     );
     assert_eq!(e.kind(), std::io::ErrorKind::Other);
@@ -316,4 +316,63 @@ fn a_file_longer_than_its_stated_length_resolves_whole() {
         "resolved whole, nothing dropped"
     );
     assert!(read == expected, "resolved byte for byte");
+}
+
+/// The refusal names the path ONCE (before `cannot resolve: `), not again in the cause (sibling
+/// review 2026-10-25).
+#[test]
+fn a_non_regular_file_refusal_names_the_path_once() {
+    let d = temp_path("dir-once");
+    std::fs::create_dir_all(&d).unwrap();
+    let e = resolve(&path(&d)).unwrap_err();
+    let _ = std::fs::remove_dir(&d);
+    assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
+    assert_eq!(
+        e.message.matches(d.to_str().unwrap()).count(),
+        1,
+        "{}",
+        e.message
+    );
+}
+
+/// A reference names its file and nothing else: any other setting (a typo, a key meant for another
+/// source) is refused naming it, rather than ignored (sibling review 2026-10-25).
+#[test]
+fn a_reference_naming_another_setting_is_invalid_naming_it() {
+    let p = temp_path("extra");
+    std::fs::write(&p, b"v").unwrap();
+    let mut s = path(&p);
+    s.insert("key".into(), "X".into());
+    let e = resolve(&s).unwrap_err();
+    let _ = std::fs::remove_file(&p);
+    assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
+    assert_eq!(
+        e.message,
+        "secret module 'file' does not take settings.key; a reference names only settings.path \
+         (fail-closed)"
+    );
+}
+
+/// The source takes no instance settings: none or an empty object opens it, and a setting is
+/// refused naming it (not ignored), as are bytes that are not a JSON object.
+#[test]
+fn instance_settings_are_none_and_a_setting_is_refused_naming_it() {
+    assert_eq!(instance_settings(b""), Ok(()));
+    assert_eq!(instance_settings(b"{}"), Ok(()));
+    assert_eq!(
+        instance_settings(br#"{"path":"/x"}"#),
+        Err(
+            "secret module 'file' takes no settings; remove settings.path (each reference \
+             names its file in its own settings.path)"
+                .to_string()
+        )
+    );
+    for bad in [&b"[1]"[..], b"null", b"\"x\"", b"{"] {
+        assert_eq!(
+            instance_settings(bad),
+            Err("settings: must be a JSON object".to_string()),
+            "{}",
+            String::from_utf8_lossy(bad)
+        );
+    }
 }
