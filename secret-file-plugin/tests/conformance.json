@@ -1,4 +1,5 @@
 {
+  "credentials": ["sk-conformance", "s3cr3t-file-conformance"],
   "settings": {},
   "secret": {
     "bad_settings": ["[1]"],

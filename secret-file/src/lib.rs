@@ -22,6 +22,7 @@
 
 #![forbid(unsafe_code)]
 
+use busbar_contract::abi::sdk::cred::Held;
 use busbar_contract::abi::secret::{
     ERROR_KIND_DENIED, ERROR_KIND_INTERNAL, ERROR_KIND_INVALID, ERROR_KIND_NOT_FOUND,
     ERROR_KIND_UNAVAILABLE,
@@ -72,11 +73,12 @@ fn not_regular(md: &std::fs::Metadata) -> std::io::Error {
 /// never becomes the process's controlling terminal before it is refused; a regular file reads
 /// the same either way.
 ///
-/// THE BYTES ARE WIPED on every path but the one that hands them back (THE DESIGN §6: auth
-/// material is zeroised): they are read into a wiped buffer sized from the handle's length, a
-/// file that grows mid-read moves into a larger wiped buffer (the old one wiped as it goes), and
-/// an I/O error mid-read drops what was read wiped.
-fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
+/// THE BYTES ARE WIPED on every path (THE DESIGN §6: auth material is zeroised): they are read into
+/// a wiped buffer sized from the handle's length, a file that grows mid-read moves into a larger
+/// wiped buffer (the old one wiped as it goes), an I/O error mid-read drops what was read wiped,
+/// and what is read is MOVED (never copied) into the zeroizing [`Held`] it answers (the credential
+/// chip, row 6: host-owned secret bytes).
+fn read_file(path: &str) -> std::io::Result<Held<Vec<u8>>> {
     use std::io::Read;
     use zeroize::Zeroizing;
 
@@ -118,7 +120,7 @@ fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
         }
         buf.extend_from_slice(&chunk[..n]);
     }
-    Ok(std::mem::take(&mut *buf))
+    Ok(Held::new(std::mem::take(&mut *buf)))
 }
 
 /// The refusal an I/O error reads as: its code, and 1.5.5's text naming the path and the cause.
@@ -153,13 +155,16 @@ fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
     SecretModuleError::new(kind, format!("secret file:{path} cannot resolve: {e}"))
 }
 
-/// Resolve `settings` (`{ path: PATH }`) to the file's bytes, untouched.
+/// Resolve `settings` (`{ path: PATH }`) to the file's bytes, untouched, in a zeroizing [`Held`]
+/// (no getter: it reaches the host only through the SDK's `resolve` answer).
 ///
 /// # Errors
 /// Fail-closed, as 1.5.5: a missing, unreadable or empty file is refused, and so is a missing or
 /// blank `path`; a non-regular file is refused by name, and so is a reference naming any setting
 /// but `path`. The text names the path, never the content.
-pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretResult<Vec<u8>> {
+pub fn resolve(
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> SecretResult<Held<Vec<u8>>> {
     let path = match settings.get(KEY).and_then(|v| v.as_str()) {
         Some(p) if !p.trim().is_empty() => p,
         _ => {

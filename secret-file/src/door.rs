@@ -8,20 +8,23 @@
 //! * `validate`, `open`, `refresh` — the source holds no settings and no state: empty settings or
 //!   an empty object open it, and any setting is refused naming it ([`crate::instance_settings`]),
 //!   the same at all three.
-//! * `resolve` — a reference's `{ path: PATH }` to the file's bytes, READY under a lease (the
-//!   SDK's [`Held`] leases, zeroed on release), or FAILED with its `ERROR_KIND_*` and its text. It
-//!   never pends: the read is the disk's, and the host runs it on its bounded disk lane at config
+//! * `resolve` — a reference's `{ path: PATH }` to the file's bytes, written by the SDK
+//!   ([`resolved`]) into the host's zeroed buffer and wiped here (the credential chip, row 6:
+//!   host-owned secret bytes; no lease, no copy left behind; a file over the host's buffer is the
+//!   short-buffer answer, and the host re-calls once with its size), or FAILED with its
+//!   `ERROR_KIND_*` and its text. It never pends: the read is the disk's, and the host runs it on its bounded disk lane at config
 //!   time only (the declared disk need, THE DESIGN §11.11 R4).
 //! * `release`, `close`, `cancel`, `tick`, `retire`, `drive` — the SDK's.
 
-use busbar_contract::abi::mechanism::call::{Outcome, BLOB_OCTETS};
+use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::mechanism::door::{
     Rewrite, Statement, REWRITE_ALIAS, REWRITE_SUGAR, REWRITE_SUGAR_NAMES, REWRITE_SUGAR_ROLE,
 };
+use busbar_contract::abi::sdk::cred::resolved;
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::life::{Held, Life, Refreshed, Refusal};
 use busbar_contract::abi::sdk::{Instance, Lent, Out, Safe, SafeSlot};
-use busbar_contract::abi::secret::{cancel, ResolveIn, ResolveOut, ERROR_KIND_UNSET};
+use busbar_contract::abi::secret::{cancel, ResolveIn, ResolveOut};
 
 use crate::{error_kind, settings_of};
 
@@ -74,7 +77,7 @@ impl Life for File {
     }
 }
 
-/// `resolve`: READY with the file's bytes under a lease, FAILED with its code and text.
+/// `resolve`: READY with the file's bytes in the host's buffer, FAILED with its code and text.
 pub struct Resolve;
 
 impl SafeSlot for Resolve {
@@ -86,16 +89,12 @@ impl SafeSlot for Resolve {
         input: Lent<'_, ResolveIn>,
         mut out: Out<'_, ResolveOut>,
     ) -> Outcome {
-        let Some(held) = instance.get() else {
+        if instance.get().is_none() {
             return Outcome::Refused;
-        };
+        }
         let settings = input.field(|i| &i.settings).bytes();
         match settings_of(settings).and_then(|s| crate::resolve(&s)) {
-            Ok(material) => {
-                out.lease_secret(|o| &o.secret, held.leases(), material, BLOB_OCTETS);
-                out.set(|o| &o.error_kind, ERROR_KIND_UNSET);
-                Outcome::Ready
-            }
+            Ok(material) => resolved(input, &mut out, material),
             Err(e) => {
                 out.set(|o| &o.error_kind, error_kind(e.kind));
                 out.fail(Refusal::failed(e.message))
