@@ -34,7 +34,8 @@ busbar-secret-file-plugin = { path = ".", features = ["dropped-in"] }
 # never in the shipped artifact. Same pinned rev, so one busbar source resolves.
 # `conformance`: busbar's PUBLISHED conformance suite (`tests/conformance.rs`'s `conformance_suite!`),
 # run against the busbar commit this repo pins.
-busbar-plugin-loader = { workspace = true, features = ["conformance"] }
+busbar-plugin-loader = { workspace = true }
+busbar-test-kit = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]
