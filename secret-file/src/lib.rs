@@ -18,10 +18,13 @@
 //! a whitespace-only file resolves to its bytes, as 1.5.5 resolved it. The not-a-regular-file
 //! refusal is new in 1.6.0 (registered in busbar's CHANGELOG), and so are the refusals of a
 //! reference naming a setting other than `path` and of instance settings, which this source takes
-//! none of ([`instance_settings`]). No refusal carries the file's content.
+//! none of ([`instance_settings`]). The one bound is the secret kind's own: a file above
+//! `HARD_MAX_BYTES` is an answer the host cannot take, so it is refused naming the path. No refusal
+//! carries the file's content.
 
 #![forbid(unsafe_code)]
 
+use busbar_contract::abi::mechanism::check::HARD_MAX_BYTES;
 use busbar_contract::abi::secret::{
     ERROR_KIND_DENIED, ERROR_KIND_INTERNAL, ERROR_KIND_INVALID, ERROR_KIND_NOT_FOUND,
     ERROR_KIND_UNAVAILABLE,
@@ -45,6 +48,19 @@ pub const NAME: &str = "busbar-secret-file";
 /// it only at config time, on its bounded disk lane, never from a request path (busbar
 /// `BUSBAR-1.6.0.md` l.1464-1469, R4, OWNER 2026-10-13).
 pub const DECLARES: &str = include_str!("../declares.json");
+
+/// The most bytes one secret may answer: the secret kind's answer bound (busbar-contract
+/// `abi/mechanism/check.rs`). The host's answer check turns a READY answer above it into a FAULT
+/// naming neither the path nor the cause, so the read refuses it first.
+const MAX: usize = HARD_MAX_BYTES as usize;
+
+/// The refusal a file above [`MAX`] reads as: the path and the bound, never the content.
+fn over_bound(path: &str) -> SecretModuleError {
+    SecretModuleError::invalid(format!(
+        "secret file:{path} cannot resolve: the file is larger than {HARD_MAX_BYTES} bytes, the \
+         most a secret may hold (fail-closed)"
+    ))
+}
 
 /// What a path that is not a regular file is refused as (an `Other` error, so [`io_refusal`] makes
 /// it `Invalid`, and its text follows `cannot resolve: `). A directory `open()`s fine on Unix and
@@ -72,14 +88,18 @@ fn not_regular(md: &std::fs::Metadata) -> std::io::Error {
 /// never becomes the process's controlling terminal before it is refused; a regular file reads
 /// the same either way.
 ///
+/// BOUNDED by [`MAX`]: a file whose length is above it is refused before a byte is read, and one
+/// that grows past it mid-read once it has yielded one byte past it. Nothing above it is answered.
+///
 /// THE BYTES ARE WIPED on every path but the one that hands them back (THE DESIGN §6: auth
 /// material is zeroised): they are read into a wiped buffer sized from the handle's length, a
 /// file that grows mid-read moves into a larger wiped buffer (the old one wiped as it goes), and
-/// an I/O error mid-read drops what was read wiped.
-fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
+/// an I/O error or the bound mid-read drops what was read wiped.
+fn read_file(path: &str) -> SecretResult<Vec<u8>> {
     use std::io::Read;
     use zeroize::Zeroizing;
 
+    let io = |e: std::io::Error| io_refusal(path, &e);
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -87,32 +107,39 @@ fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
     }
-    let mut file = options.open(path)?;
-    let md = file.metadata()?;
+    let mut file = options.open(path).map_err(io)?;
+    let md = file.metadata().map_err(io)?;
     if !md.is_file() {
-        return Err(not_regular(&md));
+        return Err(io(not_regular(&md)));
     }
-    // FALLIBLE, as 1.5.5's `std::fs::read` reserved (`try_reserve_exact`): a length no allocation
-    // can hold (a huge or sparse file named as a secret) is refused with the allocator's error,
-    // never an abort of the process.
-    let len = usize::try_from(md.len()).unwrap_or(usize::MAX);
+    if md.len() > HARD_MAX_BYTES {
+        return Err(over_bound(path));
+    }
+    // FALLIBLE, as 1.5.5's `std::fs::read` reserved (`try_reserve_exact`): memory the read cannot
+    // get is refused with the allocator's error, never an abort of the process.
+    let len = usize::try_from(md.len()).unwrap_or(MAX);
     let mut buf = Zeroizing::new(Vec::new());
-    buf.try_reserve_exact(len.saturating_add(1))?;
+    buf.try_reserve_exact(len.saturating_add(1))
+        .map_err(|e| io(e.into()))?;
     let mut chunk = Zeroizing::new([0_u8; 8192]);
     loop {
         // An interrupted read is retried, as `read_to_end` retried it.
         let n = match file.read(&mut chunk[..]) {
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            r => r?,
+            r => r.map_err(io)?,
         };
         if n == 0 {
             break;
         }
+        if buf.len() + n > MAX {
+            return Err(over_bound(path));
+        }
         if buf.len() + n > buf.capacity() {
-            // Grown past its length: a larger wiped buffer takes the bytes, and the old one is
-            // wiped as it drops.
+            // Grown past its length: a larger wiped buffer takes the bytes, never past the bound,
+            // and the old one is wiped as it drops.
             let mut bigger = Zeroizing::new(Vec::new());
-            bigger.try_reserve_exact((buf.len() + n).saturating_mul(2))?;
+            let want = (buf.len() + n).saturating_mul(2).min(MAX);
+            bigger.try_reserve_exact(want).map_err(|e| io(e.into()))?;
             bigger.extend_from_slice(&buf);
             buf = bigger;
         }
@@ -124,17 +151,21 @@ fn read_file(path: &str) -> std::io::Result<Vec<u8>> {
 /// The refusal an I/O error reads as: its code, and 1.5.5's text naming the path and the cause.
 /// The code is the contract's taxonomy (App. A B.2): a path the operator got wrong (missing, not
 /// permitted, through a regular file, a loop, a directory, an over-long or NUL-bearing name) is a
-/// CONFIG error; only a transient I/O failure (including a network-filesystem outage and file
-/// descriptor exhaustion) is an outage (`Unavailable`), and anything else
-/// defaults to the config kind, never to an outage nobody can wait out.
+/// CONFIG error; a transient I/O failure (including a network-filesystem outage and file
+/// descriptor exhaustion), a failing disk (`EIO`) and memory the read could not get are an outage
+/// (`Unavailable`), and anything else defaults to the config kind, never to an outage nobody can
+/// wait out.
 fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
     use std::io::ErrorKind as K;
     #[cfg(unix)]
-    let fd_exhausted = matches!(e.raw_os_error(), Some(libc::EMFILE | libc::ENFILE));
+    let outage_errno = matches!(
+        e.raw_os_error(),
+        Some(libc::EMFILE | libc::ENFILE | libc::EIO)
+    );
     #[cfg(not(unix))]
-    let fd_exhausted = false;
+    let outage_errno = false;
     let kind = match e.kind() {
-        _ if fd_exhausted => SecretErrorKind::Unavailable,
+        _ if outage_errno => SecretErrorKind::Unavailable,
         K::NotFound => SecretErrorKind::NotFound,
         K::PermissionDenied => SecretErrorKind::Denied,
         K::Interrupted
@@ -147,7 +178,8 @@ fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
         | K::HostUnreachable
         | K::ConnectionReset
         | K::ConnectionAborted
-        | K::NotConnected => SecretErrorKind::Unavailable,
+        | K::NotConnected
+        | K::OutOfMemory => SecretErrorKind::Unavailable,
         _ => SecretErrorKind::Invalid,
     };
     SecretModuleError::new(kind, format!("secret file:{path} cannot resolve: {e}"))
@@ -187,8 +219,7 @@ pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretR
         // Any other content resolves untouched, a whitespace-only file included, as 1.5.5 resolved
         // it (`resolve_builtin` tested a file only for emptiness): a PEM chain's trailing newline
         // is part of the secret, and a binary secret need not be UTF-8.
-        Ok(bytes) => Ok(bytes),
-        Err(e) => Err(io_refusal(path, &e)),
+        r => r,
     }
 }
 

@@ -5,6 +5,7 @@
 //! busbar's `plugin-loader/src/builtin_secret.rs`).
 
 use super::*;
+use busbar_contract::abi::mechanism::check::HARD_MAX_BYTES;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A process-unique temp path, so parallel tests never share one.
@@ -98,11 +99,50 @@ fn a_large_file_resolves_whole_as_1_5_5_read_it() {
 fn a_device_node_is_refused_and_never_read() {
     let e = read_file("/dev/zero").unwrap_err();
     assert_eq!(
-        e.to_string(),
-        "the path is not a regular file (it is a device node or fifo); a `file:` \
-         secret must name a regular file holding the credential bytes (fail-closed)"
+        e.message,
+        "secret file:/dev/zero cannot resolve: the path is not a regular file (it is a device \
+         node or fifo); a `file:` secret must name a regular file holding the credential bytes \
+         (fail-closed)"
     );
-    assert_eq!(e.kind(), std::io::ErrorKind::Other);
+    assert_eq!(e.kind, SecretErrorKind::Invalid);
+}
+
+/// The refusal a file above the secret kind's answer bound reads as: the path, never the content.
+fn over_bound_text(p: &str) -> String {
+    format!(
+        "secret file:{p} cannot resolve: the file is larger than {HARD_MAX_BYTES} bytes, the most \
+         a secret may hold (fail-closed)"
+    )
+}
+
+/// RED (row 159, audit A MEDIUM): a regular file above the secret kind's answer bound
+/// (`HARD_MAX_BYTES`, busbar-contract `abi/mechanism/check.rs`) is REFUSED, naming the path, before
+/// a byte is read. Answered READY, the host's answer check turns it into a bare FAULT naming
+/// neither path nor cause. RED before the fix: it resolved.
+#[test]
+fn a_file_above_the_answer_bound_is_refused_naming_the_path() {
+    let p = temp_path("over");
+    let f = std::fs::File::create(&p).unwrap();
+    f.set_len(HARD_MAX_BYTES + 1).unwrap();
+    drop(f);
+    let e = resolve(&path(&p)).unwrap_err();
+    std::fs::remove_file(&p).ok();
+    assert_eq!(e.message, over_bound_text(&p.display().to_string()));
+    assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
+}
+
+/// NEGATIVE CONTROL for the bound: a file of exactly `HARD_MAX_BYTES` resolves whole.
+#[test]
+fn a_file_at_the_answer_bound_resolves_whole() {
+    let p = temp_path("at-bound");
+    let f = std::fs::File::create(&p).unwrap();
+    f.set_len(HARD_MAX_BYTES).unwrap();
+    drop(f);
+    let got = resolve(&path(&p));
+    std::fs::remove_file(&p).ok();
+    let got = got.expect("a file at the bound resolves");
+    assert_eq!(got.len() as u64, HARD_MAX_BYTES);
+    assert!(got.iter().all(|&b| b == 0));
 }
 
 /// RED (Q128 secret-file LOW): the open itself never blocks on a fifo. The handle is opened
@@ -129,7 +169,7 @@ fn a_fifo_is_refused_at_once_never_waited_on() {
     let e = answered
         .expect("the open answered without waiting for a writer")
         .expect_err("a fifo is refused");
-    assert!(e.to_string().contains("is not a regular file"), "{e}");
+    assert!(e.message.contains("is not a regular file"), "{}", e.message);
 }
 
 #[test]
@@ -228,6 +268,7 @@ fn an_io_error_is_classified_config_or_transient_by_its_kind() {
         ErrorKind::ConnectionReset,
         ErrorKind::ConnectionAborted,
         ErrorKind::NotConnected,
+        ErrorKind::OutOfMemory,
     ] {
         assert_eq!(
             io_refusal("/p", &Error::from(kind)).kind,
@@ -237,7 +278,9 @@ fn an_io_error_is_classified_config_or_transient_by_its_kind() {
     }
     #[cfg(unix)]
     {
-        for errno in [libc::EMFILE, libc::ENFILE] {
+        // A failing disk (`EIO`) is an outage the operator cannot fix in config (row 159, audit B
+        // LOW: it read as `Invalid`).
+        for errno in [libc::EMFILE, libc::ENFILE, libc::EIO] {
             assert_eq!(
                 io_refusal("/p", &Error::from_raw_os_error(errno)).kind,
                 SecretErrorKind::Unavailable,
@@ -255,11 +298,10 @@ fn an_io_error_is_classified_config_or_transient_by_its_kind() {
     );
 }
 
-/// RED (Q128 secret-file, reader B on fcf42d8): a file whose reported length no allocation can
-/// hold (a sparse 8 TiB file, past any CI host under Linux's default overcommit heuristic) is
-/// REFUSED with the allocator's out-of-memory error, as 1.5.5's `std::fs::read` refused it through
-/// its fallible reservation; it never aborts the process. RED before the fix: the buffer was
-/// pre-sized infallibly from the length, and the test process aborted.
+/// A file whose reported length no allocation can hold (a sparse 8 TiB file) is refused at the
+/// answer bound, naming the path, before any buffer is sized from its length; it never aborts the
+/// process (Q128 secret-file, reader B on fcf42d8: the buffer was once pre-sized infallibly from the
+/// length, and the test process aborted).
 #[cfg(target_os = "linux")]
 #[test]
 fn a_length_no_allocation_can_hold_is_refused_not_an_abort() {
@@ -267,9 +309,9 @@ fn a_length_no_allocation_can_hold_is_refused_not_an_abort() {
     let file = std::fs::File::create(&at).unwrap();
     file.set_len(1 << 43).expect("a sparse file of that length");
     drop(file);
-    let e = read_file(at.to_str().unwrap()).unwrap_err();
+    let e = resolve(&path(&at)).unwrap_err();
     std::fs::remove_file(&at).ok();
-    assert_eq!(e.kind(), std::io::ErrorKind::OutOfMemory, "{e}");
+    assert_eq!(e.message, over_bound_text(&at.display().to_string()));
 }
 
 /// RED (codeaudit secret-file #2): a regular file whose `fstat` length UNDER-STATES its content (a
