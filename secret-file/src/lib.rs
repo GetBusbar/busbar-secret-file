@@ -9,16 +9,14 @@
 //! `resolve` reads the file its settings' `path` names. `{ file: PATH }` is the reference sugar for
 //! `{ module: file, settings: { path: PATH } }`.
 //!
-//! It is an ordinary plugin (THE DESIGN §2): linked in the default build or dropped in, called
-//! through the secret kind table by the one dispatcher, and loaded only when a reference names it.
-//! It reads the local disk, so its declares document ([`DECLARES`]) states the disk need: the host
-//! runs its `resolve` on the bounded disk lane, at config time only (THE DESIGN §11.11 R4).
+//! It is an ordinary plugin: linked in the default build or dropped in, called through the secret
+//! kind table by the one dispatcher, and loaded only when a reference names it. It reads the local
+//! disk, so its declares document ([`DECLARES`]) states the disk need: the host runs its `resolve`
+//! on the bounded disk lane, at config time only.
 //!
-//! The missing-path, EMPTY-file and `cannot resolve: <cause>` refusals are 1.5.5's, byte for byte;
-//! a whitespace-only file resolves to its bytes, as 1.5.5 resolved it. The not-a-regular-file
-//! refusal is new in 1.6.0 (registered in busbar's CHANGELOG), and so are the refusals of a
-//! reference naming a setting other than `path` and of instance settings, which this source takes
-//! none of ([`instance_settings`]). The one bound is the secret kind's own: a file above
+//! Refused: a missing path, an EMPTY file (`cannot resolve: <cause>`), a file that is not regular, a
+//! reference naming a setting other than `path`, and instance settings, which this source takes
+//! none of ([`instance_settings`]). A whitespace-only file resolves to its bytes. The one bound is the secret kind's own: a file above
 //! `HARD_MAX_BYTES` is an answer the host cannot take, so it is refused naming the path. No refusal
 //! carries the file's content.
 
@@ -43,10 +41,9 @@ pub const KEY: &str = "path";
 /// The plugin's name (the manifest name).
 pub const NAME: &str = "busbar-secret-file";
 
-/// THE PLUGIN'S `declares` SECTION (its `declares.json`), as a linked build reads it beside a
+/// The plugin's `declares` section (its `declares.json`), as a linked build reads it beside a
 /// dropped-in copy's signed one: this source reads the disk (`"disk": true`), so the host resolves
-/// it only at config time, on its bounded disk lane, never from a request path (busbar
-/// `BUSBAR-1.6.0.md` l.1464-1469, R4, OWNER 2026-10-13).
+/// it only at config time, on its bounded disk lane, never from a request path.
 pub const DECLARES: &str = include_str!("../declares.json");
 
 /// The most bytes one secret may answer: the secret kind's answer bound (busbar-contract
@@ -81,7 +78,7 @@ fn not_regular(md: &std::fs::Metadata) -> std::io::Error {
     ))
 }
 
-/// Read `path` whole, as 1.5.5 read it (`std::fs::read`), once the OPENED handle is a regular
+/// Read `path` whole (like `std::fs::read`), once the OPENED handle is a regular
 /// file: the type is judged on what was opened (its `fstat`), not on whatever the path named
 /// before the open. On unix the open is NON-BLOCKING, so a fifo (which a blocking open waits on
 /// until a writer appears) is opened at once and refused here, and NO-CTTY, so a terminal device
@@ -91,8 +88,7 @@ fn not_regular(md: &std::fs::Metadata) -> std::io::Error {
 /// BOUNDED by [`MAX`]: a file whose length is above it is refused before a byte is read, and one
 /// that grows past it mid-read once it has yielded one byte past it. Nothing above it is answered.
 ///
-/// THE BYTES ARE WIPED on every path but the one that hands them back (THE DESIGN §6: auth
-/// material is zeroised): they are read into a wiped buffer sized from the handle's length, a
+/// The bytes are WIPED on every path but the one that hands them back: they are read into a wiped buffer sized from the handle's length, a
 /// file that grows mid-read moves into a larger wiped buffer (the old one wiped as it goes), and
 /// an I/O error or the bound mid-read drops what was read wiped.
 fn read_file(path: &str) -> SecretResult<Vec<u8>> {
@@ -115,7 +111,7 @@ fn read_file(path: &str) -> SecretResult<Vec<u8>> {
     if md.len() > HARD_MAX_BYTES {
         return Err(over_bound(path));
     }
-    // FALLIBLE, as 1.5.5's `std::fs::read` reserved (`try_reserve_exact`): memory the read cannot
+    // FALLIBLE (`try_reserve_exact`, as `std::fs::read` does): memory the read cannot
     // get is refused with the allocator's error, never an abort of the process.
     let len = usize::try_from(md.len()).unwrap_or(MAX);
     let mut buf = Zeroizing::new(Vec::new());
@@ -148,7 +144,7 @@ fn read_file(path: &str) -> SecretResult<Vec<u8>> {
     Ok(std::mem::take(&mut *buf))
 }
 
-/// The refusal an I/O error reads as: its code, and 1.5.5's text naming the path and the cause.
+/// The refusal an I/O error reads as: its code, and a text naming the path and the cause.
 /// The code is the contract's taxonomy (App. A B.2): a path the operator got wrong (missing, not
 /// permitted, through a regular file, a loop, a directory, an over-long or NUL-bearing name) is a
 /// CONFIG error; a transient I/O failure (including a network-filesystem outage and file
@@ -188,7 +184,7 @@ fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
 /// Resolve `settings` (`{ path: PATH }`) to the file's bytes, untouched.
 ///
 /// # Errors
-/// Fail-closed, as 1.5.5: a missing, unreadable or empty file is refused, and so is a missing or
+/// Fail-closed: a missing, unreadable or empty file is refused, and so is a missing or
 /// blank `path`; a non-regular file is refused by name, and so is a reference naming any setting
 /// but `path`. The text names the path, never the content.
 pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretResult<Vec<u8>> {
@@ -216,9 +212,8 @@ pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretR
             "secret file:{path} resolved to an EMPTY file; a secret must be non-empty \
              (fail-closed)"
         ))),
-        // Any other content resolves untouched, a whitespace-only file included, as 1.5.5 resolved
-        // it (`resolve_builtin` tested a file only for emptiness): a PEM chain's trailing newline
-        // is part of the secret, and a binary secret need not be UTF-8.
+        // Any other content resolves untouched, a whitespace-only file included: a PEM
+        // chain's trailing newline is part of the secret, and a binary secret need not be UTF-8.
         r => r,
     }
 }
