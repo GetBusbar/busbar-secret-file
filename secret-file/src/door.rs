@@ -11,7 +11,7 @@
 //! * `resolve` — a reference's `{ path: PATH }` to the file's bytes, READY under a lease (the
 //!   SDK's [`Held`] leases, zeroed on release), or FAILED with its `ERROR_KIND_*` and its text. It
 //!   never pends: the read is the disk's, and the host runs it on its bounded disk lane at config
-//!   time only (the declared disk need, THE DESIGN §11.11 R4).
+//!   time only (the declared disk need).
 //! * `release`, `close`, `cancel`, `tick`, `retire`, `drive` — the SDK's.
 
 use busbar_contract::abi::mechanism::call::{Outcome, BLOB_OCTETS};
@@ -35,8 +35,8 @@ const fn rewrite(class: u32, to: &'static str) -> Rewrite {
     }
 }
 
-/// The names config gives this source (THE DESIGN §2, the Statement's `rewrites`; busbar step 2c,
-/// the sugar each secret plugin spells itself): the module alias (`module: file`), the
+/// The names config gives this source (the Statement's `rewrites`, the sugar each secret plugin
+/// spells itself): the module alias (`module: file`), the
 /// reference sugar (`{ file: X }` becomes `{module: file, settings: {path: X}}`), what a
 /// refusal names its value, and its core role.
 const REWRITES: &[Rewrite] = &[
