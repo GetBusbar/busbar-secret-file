@@ -90,8 +90,25 @@ fn a_large_file_resolves_whole_as_1_5_5_read_it() {
     let _ = std::fs::remove_file(&p);
 }
 
-/// The refusal a source above the secret kind's answer bound reads as: the path, never the content.
-fn over_bound(p: &str) -> String {
+/// RED (audit pinned secret-file #3): a device node (`/dev/zero`, which never ends) is refused in
+/// the registered words and never read. This pins the refusal and its text only: a check of the
+/// path before the open would refuse it alike, so it does not by itself prove the type is judged
+/// on the OPENED handle (no test here swaps a path between a check and the open).
+#[cfg(unix)]
+#[test]
+fn a_device_node_is_refused_and_never_read() {
+    let e = read_file("/dev/zero").unwrap_err();
+    assert_eq!(
+        e.message,
+        "secret file:/dev/zero cannot resolve: the path is not a regular file (it is a device \
+         node or fifo); a `file:` secret must name a regular file holding the credential bytes \
+         (fail-closed)"
+    );
+    assert_eq!(e.kind, SecretErrorKind::Invalid);
+}
+
+/// The refusal a file above the secret kind's answer bound reads as: the path, never the content.
+fn over_bound_text(p: &str) -> String {
     format!(
         "secret file:{p} cannot resolve: the file is larger than {HARD_MAX_BYTES} bytes, the most \
          a secret may hold (fail-closed)"
@@ -100,8 +117,8 @@ fn over_bound(p: &str) -> String {
 
 /// RED (row 159, audit A MEDIUM): a regular file above the secret kind's answer bound
 /// (`HARD_MAX_BYTES`, busbar-contract `abi/mechanism/check.rs`) is REFUSED, naming the path, before
-/// a byte is read or leased. Answered READY, the host's answer check turns it into a bare FAULT
-/// naming neither path nor cause, and the lease is never released. RED before the fix: it resolved.
+/// a byte is read. Answered READY, the host's answer check turns it into a bare FAULT naming
+/// neither path nor cause. RED before the fix: it resolved.
 #[test]
 fn a_file_above_the_answer_bound_is_refused_naming_the_path() {
     let p = temp_path("over");
@@ -110,12 +127,11 @@ fn a_file_above_the_answer_bound_is_refused_naming_the_path() {
     drop(f);
     let e = resolve(&path(&p)).unwrap_err();
     std::fs::remove_file(&p).ok();
-    assert_eq!(e.message, over_bound(&p.display().to_string()));
+    assert_eq!(e.message, over_bound_text(&p.display().to_string()));
     assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
 }
 
-/// NEGATIVE CONTROL for the bound: a file of exactly `HARD_MAX_BYTES` resolves whole, as 1.5.5
-/// read it.
+/// NEGATIVE CONTROL for the bound: a file of exactly `HARD_MAX_BYTES` resolves whole.
 #[test]
 fn a_file_at_the_answer_bound_resolves_whole() {
     let p = temp_path("at-bound");
@@ -129,24 +145,13 @@ fn a_file_at_the_answer_bound_resolves_whole() {
     assert!(got.iter().all(|&b| b == 0));
 }
 
-/// RED (row 159, audit A MEDIUM): a source with no length up front (a device that never ends) is
-/// refused at the bound, naming the path, never read past it. RED before the fix: `/dev/zero` was
-/// refused as not a regular file, text 1.5.5 never gave.
+/// RED (Q128 secret-file LOW): the open itself never blocks on a fifo. The handle is opened
+/// non-blocking and its type judged on the handle, so a path that is a fifo when it is opened (one
+/// swapped in after any path check) is refused at once, never waited on for a writer. RED before
+/// the fix: `read_file` opened the fifo blocking and hung until a writer appeared.
 #[cfg(unix)]
 #[test]
-fn a_stream_past_the_answer_bound_is_refused_naming_the_path() {
-    let e = resolve(&path(std::path::Path::new("/dev/zero"))).unwrap_err();
-    assert_eq!(e.message, over_bound("/dev/zero"));
-    assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
-}
-
-/// RED (row 159, audits A HIGH / B MEDIUM): AS 1.5.5 (`std::fs::read`, v1.5.5
-/// `crates/busbar/src/config/secret.rs` `resolve_builtin`), a fifo is read once a writer supplies
-/// it: a secret delivered over a named pipe, a piped `/dev/stdin` or a `<(cmd)` path resolves. No
-/// owner-signed accepted difference refuses it. RED before the fix: refused as not a regular file.
-#[cfg(unix)]
-#[test]
-fn a_fifo_with_a_writer_resolves_as_1_5_5_read_it() {
+fn a_fifo_is_refused_at_once_never_waited_on() {
     let fifo = temp_path("fifo");
     let _ = std::fs::remove_file(&fifo);
     let made = std::process::Command::new("mkfifo")
@@ -154,55 +159,31 @@ fn a_fifo_with_a_writer_resolves_as_1_5_5_read_it() {
         .status()
         .expect("mkfifo runs");
     assert!(made.success(), "mkfifo made the fifo");
-    let to = fifo.clone();
-    std::thread::spawn(move || {
-        use std::io::Write;
-        let mut w = std::fs::OpenOptions::new().write(true).open(&to).unwrap();
-        let _ = w.write_all(b"piped-secret\n");
-    });
     let (tx, rx) = std::sync::mpsc::channel();
-    let at = path(&fifo);
+    let at = fifo.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(resolve(&at));
+        let _ = tx.send(read_file(at.to_str().unwrap()).map(|_| ()));
     });
-    let answered = rx.recv_timeout(std::time::Duration::from_secs(20));
+    let answered = rx.recv_timeout(std::time::Duration::from_secs(5));
     let _ = std::fs::remove_file(&fifo);
-    let got = answered.expect("the read answered once the writer closed");
-    assert_eq!(
-        got.map_err(|e| e.message).as_deref(),
-        Ok(&b"piped-secret\n"[..])
-    );
+    let e = answered
+        .expect("the open answered without waiting for a writer")
+        .expect_err("a fifo is refused");
+    assert!(e.message.contains("is not a regular file"), "{}", e.message);
 }
 
-/// RED (row 159, audits A HIGH / B MEDIUM): a directory is refused in 1.5.5's words, byte for
-/// byte: `secret file:{path} cannot resolve: {io_error}`, the error `std::fs::read` gave (1.5.5
-/// inventory `qa/evidence/inventory/1.5.5-auth-secrets.md`, the `file` read-error row). RED before
-/// the fix: it read `... is not a regular file (it is a directory) ...`.
 #[test]
-fn a_directory_is_refused_in_1_5_5_s_words() {
+fn a_directory_is_refused_as_not_a_regular_file() {
     let d = temp_path("dir");
     std::fs::create_dir_all(&d).unwrap();
     let e = resolve(&path(&d)).unwrap_err();
-    let read = std::fs::read(&d).expect_err("1.5.5's read of a directory fails");
+    assert!(
+        e.message
+            .contains("is not a regular file (it is a directory)"),
+        "{}",
+        e.message
+    );
     let _ = std::fs::remove_dir(&d);
-    assert_eq!(
-        e.message,
-        format!("secret file:{} cannot resolve: {read}", d.display())
-    );
-    assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
-}
-
-/// RED (row 159, audit A HIGH): `/dev/null` reads as 1.5.5 read it, an EMPTY file, refused in
-/// 1.5.5's empty-file words. RED before the fix: refused as not a regular file.
-#[cfg(unix)]
-#[test]
-fn dev_null_is_refused_as_1_5_5_s_empty_file() {
-    let e = resolve(&path(std::path::Path::new("/dev/null"))).unwrap_err();
-    assert_eq!(
-        e.message,
-        "secret file:/dev/null resolved to an EMPTY file; a secret must be non-empty (fail-closed)"
-    );
-    assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
 }
 
 #[cfg(unix)]
@@ -250,46 +231,62 @@ fn the_declares_section_states_the_disk_need() {
     assert_eq!(d["disk"], serde_json::Value::Bool(true), "{DECLARES}");
 }
 
-/// A PATH THE OPERATOR GOT WRONG IS A CONFIG ERROR, A FILESYSTEM THAT CANNOT BE REACHED IS AN
-/// OUTAGE (App. A B.2; the contract's taxonomy: `ERROR_KIND_INVALID` is settings that are wrong,
-/// `ERROR_KIND_UNAVAILABLE` a backend, the filesystem included, that could not be reached): a path
-/// through a regular file, a symlink loop, a directory, an over-long or NUL-bearing name, a socket
-/// read as `Invalid`; a failing disk (`EIO`), memory the read could not get, and any other cause
-/// read as `Unavailable`. RED (row 159, audit B LOW) before the fix: `EIO` and out-of-memory read
-/// as `Invalid`, a config error the operator cannot fix.
+/// A PATH THE OPERATOR GOT WRONG IS A CONFIG ERROR, NOT AN OUTAGE (App. A B.2; the contract's
+/// `SecretErrorKind` taxonomy): a path through a regular file, a symlink loop, a directory, an
+/// over-long or NUL-bearing name read as `Invalid`; only a transient I/O failure is `Unavailable`,
+/// and anything else defaults to the config kind. A symlink loop's kind (`FilesystemLoop`) is not
+/// stable on the pinned toolchain, so it is not named here; it falls to that same default. RED
+/// before the fix: every error that was not not-found or permission-denied read as an outage.
+/// RED before the fix: a network outage (`NetworkDown`, `NetworkUnreachable`, `HostUnreachable`,
+/// `ConnectionReset`, `ConnectionAborted`, `NotConnected`) or descriptor exhaustion (`EMFILE`,
+/// `ENFILE`) reading the file read as a config error ("the settings blob is malformed").
 #[test]
-fn an_io_error_is_classified_config_or_unreachable_by_its_kind() {
+fn an_io_error_is_classified_config_or_transient_by_its_kind() {
     use std::io::{Error, ErrorKind};
-    let mut config = vec![
-        Error::from(ErrorKind::NotADirectory),
-        Error::from(ErrorKind::IsADirectory),
-        Error::from(ErrorKind::InvalidFilename),
-        Error::from(ErrorKind::InvalidInput),
-        Error::from(ErrorKind::Unsupported),
-    ];
-    let mut unreachable = vec![
-        Error::from(ErrorKind::Interrupted),
-        Error::from(ErrorKind::TimedOut),
-        Error::from(ErrorKind::WouldBlock),
-        Error::from(ErrorKind::ResourceBusy),
-        Error::from(ErrorKind::StaleNetworkFileHandle),
-        Error::from(ErrorKind::OutOfMemory),
-    ];
+    for kind in [
+        ErrorKind::NotADirectory,
+        ErrorKind::IsADirectory,
+        ErrorKind::InvalidFilename,
+        ErrorKind::InvalidInput,
+        ErrorKind::Unsupported,
+    ] {
+        assert_eq!(
+            io_refusal("/p", &Error::from(kind)).kind,
+            SecretErrorKind::Invalid,
+            "{kind:?}"
+        );
+    }
+    for kind in [
+        ErrorKind::Interrupted,
+        ErrorKind::TimedOut,
+        ErrorKind::WouldBlock,
+        ErrorKind::ResourceBusy,
+        ErrorKind::StaleNetworkFileHandle,
+        ErrorKind::NetworkDown,
+        ErrorKind::NetworkUnreachable,
+        ErrorKind::HostUnreachable,
+        ErrorKind::ConnectionReset,
+        ErrorKind::ConnectionAborted,
+        ErrorKind::NotConnected,
+        ErrorKind::OutOfMemory,
+    ] {
+        assert_eq!(
+            io_refusal("/p", &Error::from(kind)).kind,
+            SecretErrorKind::Unavailable,
+            "{kind:?}"
+        );
+    }
     #[cfg(unix)]
     {
-        config.push(Error::from_raw_os_error(libc::ELOOP));
-        config.push(Error::from_raw_os_error(libc::ENXIO));
-        unreachable.push(Error::from_raw_os_error(libc::EIO));
-    }
-    for e in &config {
-        assert_eq!(io_refusal("/p", e).kind, SecretErrorKind::Invalid, "{e:?}");
-    }
-    for e in &unreachable {
-        assert_eq!(
-            io_refusal("/p", e).kind,
-            SecretErrorKind::Unavailable,
-            "{e:?}"
-        );
+        // A failing disk (`EIO`) is an outage the operator cannot fix in config (row 159, audit B
+        // LOW: it read as `Invalid`).
+        for errno in [libc::EMFILE, libc::ENFILE, libc::EIO] {
+            assert_eq!(
+                io_refusal("/p", &Error::from_raw_os_error(errno)).kind,
+                SecretErrorKind::Unavailable,
+                "errno {errno}"
+            );
+        }
     }
     assert_eq!(
         io_refusal("/p", &Error::from(ErrorKind::NotFound)).kind,
@@ -314,5 +311,110 @@ fn a_length_no_allocation_can_hold_is_refused_not_an_abort() {
     drop(file);
     let e = resolve(&path(&at)).unwrap_err();
     std::fs::remove_file(&at).ok();
-    assert_eq!(e.message, over_bound(&at.display().to_string()));
+    assert_eq!(e.message, over_bound_text(&at.display().to_string()));
+}
+
+/// RED (codeaudit secret-file #2): a regular file whose `fstat` length UNDER-STATES its content (a
+/// procfs file states 0, as a file growing mid-read outruns its length) resolves whole: the read
+/// outgrows the buffer sized from the length more than once, and every byte read before a growth
+/// is carried into the larger buffer. Read off a child whose command line is known byte for byte.
+/// RED with the carry (`bigger.extend_from_slice(&buf)`) removed: the bytes read before the second
+/// growth were lost, and the secret came back truncated with no error.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_longer_than_its_stated_length_resolves_whole() {
+    let long = "x".repeat(40 * 1024);
+    let argv = ["/bin/sh", "-c", "while :; do sleep 1; done", "sh", &long];
+    let mut expected = Vec::new();
+    for arg in argv {
+        expected.extend_from_slice(arg.as_bytes());
+        expected.push(0);
+    }
+    let mut child = std::process::Command::new(argv[0])
+        .args(&argv[1..])
+        .spawn()
+        .expect("sh runs");
+    let at = std::path::PathBuf::from(format!("/proc/{}/cmdline", child.id()));
+    // The child's argv is in place only once its exec has set it up (`spawn` returns as the exec
+    // begins); until then its cmdline reads empty.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::fs::read(&at).map_or(true, |b| b != expected) && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let stated = std::fs::metadata(&at).map(|m| (m.is_file(), m.len()));
+    let read = resolve(&path(&at));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(
+        stated.expect("the child's cmdline"),
+        (true, 0),
+        "a regular file stating length 0"
+    );
+    let read = read.expect("the cmdline resolves");
+    assert_eq!(
+        read.len(),
+        expected.len(),
+        "resolved whole, nothing dropped"
+    );
+    assert!(read == expected, "resolved byte for byte");
+}
+
+/// The refusal names the path ONCE (before `cannot resolve: `), not again in the cause (sibling
+/// review 2026-10-25).
+#[test]
+fn a_non_regular_file_refusal_names_the_path_once() {
+    let d = temp_path("dir-once");
+    std::fs::create_dir_all(&d).unwrap();
+    let e = resolve(&path(&d)).unwrap_err();
+    let _ = std::fs::remove_dir(&d);
+    assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
+    assert_eq!(
+        e.message.matches(d.to_str().unwrap()).count(),
+        1,
+        "{}",
+        e.message
+    );
+}
+
+/// A reference names its file and nothing else: any other setting (a typo, a key meant for another
+/// source) is refused naming it, rather than ignored (sibling review 2026-10-25).
+#[test]
+fn a_reference_naming_another_setting_is_invalid_naming_it() {
+    let p = temp_path("extra");
+    std::fs::write(&p, b"v").unwrap();
+    let mut s = path(&p);
+    s.insert("key".into(), "X".into());
+    let e = resolve(&s).unwrap_err();
+    let _ = std::fs::remove_file(&p);
+    assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
+    assert_eq!(
+        e.message,
+        "secret module 'file' does not take settings.key; a reference names only settings.path \
+         (fail-closed)"
+    );
+}
+
+/// The source takes no instance settings: none or an empty object opens it, and a setting is
+/// refused naming it (not ignored), as are bytes that are not a JSON object.
+#[test]
+fn instance_settings_are_none_and_a_setting_is_refused_naming_it() {
+    assert_eq!(instance_settings(b""), Ok(()));
+    assert_eq!(instance_settings(b"{}"), Ok(()));
+    assert_eq!(
+        instance_settings(br#"{"path":"/x"}"#),
+        Err(
+            "secret module 'file' takes no settings; remove settings.path (each reference \
+             names its file in its own settings.path)"
+                .to_string()
+        )
+    );
+    for bad in [&b"[1]"[..], b"null", b"\"x\"", b"{"] {
+        assert_eq!(
+            instance_settings(bad),
+            Err("settings: must be a JSON object".to_string()),
+            "{}",
+            String::from_utf8_lossy(bad)
+        );
+    }
 }

@@ -4,7 +4,7 @@ name = "busbar-secret-file"
 version = "1.0.0"
 publish = false            # linked into busbar at a pinned rev, or shipped as a signed tarball; never to crates.io
 edition = "2021"
-rust-version = "1.97"
+rust-version.workspace = true
 description = "The file secret source for busbar's kind:secret plugin family, on the secret kind's memory ABI: `{ file: /path }` resolves to the file's bytes, untouched, fail-closed."
 license = "Apache-2.0"
 
@@ -22,6 +22,8 @@ serde_json = { workspace = true }
 zeroize = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-# `O_NOCTTY` for the one open (`read_file`): a terminal named as a secret never becomes the
-# controlling terminal.
+# `O_NONBLOCK` for the one open (`read_file`): a fifo's open never waits for a writer.
 libc = { workspace = true }
+
+[lints]
+workspace = true

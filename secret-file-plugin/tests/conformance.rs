@@ -171,11 +171,15 @@ fn open(p: &Plugin<Secret>) -> String {
 }
 
 fn refresh(p: &Plugin<Secret>) -> String {
+    refresh_with(p, NO_BLOB)
+}
+
+fn refresh_with(p: &Plugin<Secret>, settings: Blob) -> String {
     let mut f = Frame::new(
         RefreshIn {
             head: in_head(),
             generation: 2,
-            settings: NO_BLOB,
+            settings,
             secrets: std::ptr::null(),
             secrets_len: 0,
         },
@@ -255,7 +259,12 @@ fn close(p: &Plugin<Secret>) -> String {
 /// What one door does, as one comparable transcript.
 fn transcript(p: &Plugin<Secret>) -> serde_json::Value {
     let (set, empty, unset) = fixtures();
-    let validated = [validate(p, ""), validate(p, "{}"), validate(p, "[1]")];
+    let validated = [
+        validate(p, ""),
+        validate(p, "{}"),
+        validate(p, "[1]"),
+        validate(p, r#"{"path":"/x"}"#),
+    ];
     let unopened = resolve(p, &format!(r#"{{"path":"{set}"}}"#));
     let (opened, opened_again) = (open(p), open(p));
     let resolved: Vec<String> = [
@@ -264,6 +273,7 @@ fn transcript(p: &Plugin<Secret>) -> serde_json::Value {
         format!(r#"{{"path":"{empty}"}}"#),
         r#"{"path":"  "}"#.to_string(),
         "[1]".to_string(),
+        format!(r#"{{"path":"{set}","key":"X"}}"#),
     ]
     .iter()
     .map(|s| resolve(p, s))
@@ -278,6 +288,7 @@ fn transcript(p: &Plugin<Secret>) -> serde_json::Value {
         "open_again": opened_again,
         "resolve": resolved,
         "release_unknown": release(p, 42),
+        "refresh_refused": refresh_with(p, json(br#"{"path":"/x"}"#)),
         "refresh": refresh(p),
         "tick": tick(p),
         "close": close(p),
@@ -338,6 +349,7 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
             "Ready lease=false ",
             "Ready lease=false ",
             "Failed lease=false settings: must be a JSON object",
+            "Failed lease=false secret module 'file' takes no settings; remove settings.path (each reference names its file in its own settings.path)",
         ])
     );
     assert!(
@@ -369,9 +381,15 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
             format!("Failed lease=false secret file:{empty} resolved to an EMPTY file; a secret must be non-empty (fail-closed) kind=4 material=\"\""),
             "Failed lease=false secret module 'file' requires settings.path naming the file (e.g. `{ file: /run/secrets/x }` or `{ module: file, settings: { path: /run/secrets/x } }`) kind=4 material=\"\"",
             "NOT-AN-OBJECT",
+            "Failed lease=false secret module 'file' does not take settings.key; a reference names only settings.path (fail-closed) kind=4 material=\"\"",
         ])
     );
     assert_eq!(linked["release_unknown"], "Refused lease=false ");
+    assert_eq!(
+        linked["refresh_refused"],
+        "Failed lease=false secret module 'file' takes no settings; remove settings.path (each reference names its file in its own settings.path)",
+        "refresh refuses what validate refuses"
+    );
     assert_eq!(linked["refresh"], "Ready lease=false ");
     assert_eq!(linked["tick"], "Ready lease=false  next=0");
     assert_eq!(linked["close"], "Ready lease=false ");

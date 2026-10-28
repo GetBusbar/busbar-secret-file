@@ -14,11 +14,13 @@
 //! It reads the local disk, so its declares document ([`DECLARES`]) states the disk need: the host
 //! runs its `resolve` on the bounded disk lane, at config time only (THE DESIGN §11.11 R4).
 //!
-//! It reads what 1.5.5 read (`std::fs::read`): whatever the path opens to, a directory, a device
-//! or a fifo included, with 1.5.5's missing-path, EMPTY-file and `cannot resolve: <cause>` refusals
-//! byte for byte; a whitespace-only file resolves to its bytes, as 1.5.5 resolved it. The one bound
-//! is the secret kind's own: an answer above `HARD_MAX_BYTES` is one the host cannot take, so it is
-//! refused naming the path. No refusal carries the file's content.
+//! The missing-path, EMPTY-file and `cannot resolve: <cause>` refusals are 1.5.5's, byte for byte;
+//! a whitespace-only file resolves to its bytes, as 1.5.5 resolved it. The not-a-regular-file
+//! refusal is new in 1.6.0 (registered in busbar's CHANGELOG), and so are the refusals of a
+//! reference naming a setting other than `path` and of instance settings, which this source takes
+//! none of ([`instance_settings`]). The one bound is the secret kind's own: a file above
+//! `HARD_MAX_BYTES` is an answer the host cannot take, so it is refused naming the path. No refusal
+//! carries the file's content.
 
 #![forbid(unsafe_code)]
 
@@ -52,7 +54,7 @@ pub const DECLARES: &str = include_str!("../declares.json");
 /// naming neither the path nor the cause, so the read refuses it first.
 const MAX: usize = HARD_MAX_BYTES as usize;
 
-/// The refusal a source above [`MAX`] reads as: the path and the bound, never the content.
+/// The refusal a file above [`MAX`] reads as: the path and the bound, never the content.
 fn over_bound(path: &str) -> SecretModuleError {
     SecretModuleError::invalid(format!(
         "secret file:{path} cannot resolve: the file is larger than {HARD_MAX_BYTES} bytes, the \
@@ -60,20 +62,38 @@ fn over_bound(path: &str) -> SecretModuleError {
     ))
 }
 
-/// Read `path` whole, as 1.5.5 read it (`std::fs::read`): a BLOCKING open that follows symlinks
-/// (Kubernetes projects every secret as a symlink into a `..data/` directory), then the handle
-/// read to its end. Whatever the path opens to is read as 1.5.5 read it: a fifo or a piped
-/// `/dev/stdin` once its writer supplies it, `/dev/null` as an empty file, and a directory refused
-/// by the read's own error. On unix the open is NO-CTTY, so a terminal device never becomes the
-/// process's controlling terminal; the bytes read are the same.
+/// What a path that is not a regular file is refused as (an `Other` error, so [`io_refusal`] makes
+/// it `Invalid`, and its text follows `cannot resolve: `). A directory `open()`s fine on Unix and
+/// fails only at read time with a bare errno ("Is a directory"), which does not tell an operator
+/// they pointed the credential at a folder; a fifo would BLOCK a blocking open until a writer
+/// appears; a device node such as `/dev/zero` never ends. (A unix socket does not open at all: it
+/// is refused by the open's own error.)
+/// The path is not repeated here: [`io_refusal`] names it once, before `cannot resolve: `.
+fn not_regular(md: &std::fs::Metadata) -> std::io::Error {
+    let kind = if md.is_dir() {
+        "a directory"
+    } else {
+        "a device node or fifo"
+    };
+    std::io::Error::other(format!(
+        "the path is not a regular file (it is {kind}); a `file:` secret must name a regular file \
+         holding the credential bytes (fail-closed)"
+    ))
+}
+
+/// Read `path` whole, as 1.5.5 read it (`std::fs::read`), once the OPENED handle is a regular
+/// file: the type is judged on what was opened (its `fstat`), not on whatever the path named
+/// before the open. On unix the open is NON-BLOCKING, so a fifo (which a blocking open waits on
+/// until a writer appears) is opened at once and refused here, and NO-CTTY, so a terminal device
+/// never becomes the process's controlling terminal before it is refused; a regular file reads
+/// the same either way.
 ///
-/// BOUNDED by [`MAX`], and only above it does anything differ from 1.5.5: a regular file whose
-/// length is above it is refused before a byte is read, and any other source (a device, a fifo, a
-/// file that grew) once it has yielded one byte past it. Nothing above it is ever leased.
+/// BOUNDED by [`MAX`]: a file whose length is above it is refused before a byte is read, and one
+/// that grows past it mid-read once it has yielded one byte past it. Nothing above it is answered.
 ///
 /// THE BYTES ARE WIPED on every path but the one that hands them back (THE DESIGN §6: auth
 /// material is zeroised): they are read into a wiped buffer sized from the handle's length, a
-/// source that grows past it moves into a larger wiped buffer (the old one wiped as it goes), and
+/// file that grows mid-read moves into a larger wiped buffer (the old one wiped as it goes), and
 /// an I/O error or the bound mid-read drops what was read wiped.
 fn read_file(path: &str) -> SecretResult<Vec<u8>> {
     use std::io::Read;
@@ -85,17 +105,19 @@ fn read_file(path: &str) -> SecretResult<Vec<u8>> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOCTTY);
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
     }
     let mut file = options.open(path).map_err(io)?;
-    // The length is a hint, as `std::fs::read` took it: a handle with none reads as one of length 0.
-    let len = match file.metadata() {
-        Ok(md) if md.is_file() && md.len() > HARD_MAX_BYTES => return Err(over_bound(path)),
-        Ok(md) if md.is_file() => usize::try_from(md.len()).unwrap_or(MAX),
-        _ => 0,
-    };
-    // FALLIBLE, as `std::fs::read` reserved (`try_reserve_exact`): memory the read cannot get is
-    // refused with the allocator's error, never an abort of the process.
+    let md = file.metadata().map_err(io)?;
+    if !md.is_file() {
+        return Err(io(not_regular(&md)));
+    }
+    if md.len() > HARD_MAX_BYTES {
+        return Err(over_bound(path));
+    }
+    // FALLIBLE, as 1.5.5's `std::fs::read` reserved (`try_reserve_exact`): memory the read cannot
+    // get is refused with the allocator's error, never an abort of the process.
+    let len = usize::try_from(md.len()).unwrap_or(MAX);
     let mut buf = Zeroizing::new(Vec::new());
     buf.try_reserve_exact(len.saturating_add(1))
         .map_err(|e| io(e.into()))?;
@@ -127,48 +149,48 @@ fn read_file(path: &str) -> SecretResult<Vec<u8>> {
 }
 
 /// The refusal an I/O error reads as: its code, and 1.5.5's text naming the path and the cause.
-/// The code is the contract's taxonomy (App. A B.2; `abi::secret::ERROR_KIND_*`): a path the
-/// operator got wrong (missing, not permitted, through a regular file, a loop, a directory, an
-/// over-long or NUL-bearing name, a socket) is a CONFIG error; a filesystem that could not be
-/// reached (a failing disk's `EIO`, memory the read could not get, a stale or busy handle) is
-/// `Unavailable`, and so is any cause not named here.
+/// The code is the contract's taxonomy (App. A B.2): a path the operator got wrong (missing, not
+/// permitted, through a regular file, a loop, a directory, an over-long or NUL-bearing name) is a
+/// CONFIG error; a transient I/O failure (including a network-filesystem outage and file
+/// descriptor exhaustion), a failing disk (`EIO`) and memory the read could not get are an outage
+/// (`Unavailable`), and anything else defaults to the config kind, never to an outage nobody can
+/// wait out.
 fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
     use std::io::ErrorKind as K;
+    #[cfg(unix)]
+    let outage_errno = matches!(
+        e.raw_os_error(),
+        Some(libc::EMFILE | libc::ENFILE | libc::EIO)
+    );
+    #[cfg(not(unix))]
+    let outage_errno = false;
     let kind = match e.kind() {
+        _ if outage_errno => SecretErrorKind::Unavailable,
         K::NotFound => SecretErrorKind::NotFound,
         K::PermissionDenied => SecretErrorKind::Denied,
-        K::NotADirectory
-        | K::IsADirectory
-        | K::InvalidFilename
-        | K::InvalidInput
-        | K::Unsupported
-        | K::Other => SecretErrorKind::Invalid,
-        _ if operator_errno(e) => SecretErrorKind::Invalid,
-        _ => SecretErrorKind::Unavailable,
+        K::Interrupted
+        | K::TimedOut
+        | K::WouldBlock
+        | K::ResourceBusy
+        | K::StaleNetworkFileHandle
+        | K::NetworkDown
+        | K::NetworkUnreachable
+        | K::HostUnreachable
+        | K::ConnectionReset
+        | K::ConnectionAborted
+        | K::NotConnected
+        | K::OutOfMemory => SecretErrorKind::Unavailable,
+        _ => SecretErrorKind::Invalid,
     };
     SecretModuleError::new(kind, format!("secret file:{path} cannot resolve: {e}"))
-}
-
-/// The path errors with no stable `ErrorKind` on the pinned toolchain, judged by their errno: a
-/// symlink loop (`ELOOP`) and a socket or absent device (`ENXIO`).
-fn operator_errno(e: &std::io::Error) -> bool {
-    #[cfg(unix)]
-    {
-        matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENXIO))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = e;
-        false
-    }
 }
 
 /// Resolve `settings` (`{ path: PATH }`) to the file's bytes, untouched.
 ///
 /// # Errors
 /// Fail-closed, as 1.5.5: a missing, unreadable or empty file is refused, and so is a missing or
-/// blank `path`; a source above the answer bound is refused naming it. The text names the path,
-/// never the content.
+/// blank `path`; a non-regular file is refused by name, and so is a reference naming any setting
+/// but `path`. The text names the path, never the content.
 pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretResult<Vec<u8>> {
     let path = match settings.get(KEY).and_then(|v| v.as_str()) {
         Some(p) if !p.trim().is_empty() => p,
@@ -179,6 +201,16 @@ pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretR
             ))
         }
     };
+    if let Some(other) = settings.keys().find(|k| k.as_str() != KEY) {
+        return Err(SecretModuleError::invalid(format!(
+            "secret module 'file' does not take settings.{other}; a reference names only \
+             settings.path (fail-closed)"
+        )));
+    }
+    // A path-shaped source must name a REGULAR FILE ([`not_regular`]), judged on the OPENED handle
+    // ([`read_file`], opened non-blocking so a fifo is never waited on): one open, one judgement,
+    // with no path lookup before it a swapped path could slip past. The open FOLLOWS symlinks,
+    // which is required: Kubernetes projects every secret as a symlink into a `..data/` directory.
     match read_file(path) {
         Ok(bytes) if bytes.is_empty() => Err(SecretModuleError::invalid(format!(
             "secret file:{path} resolved to an EMPTY file; a secret must be non-empty \
@@ -188,6 +220,28 @@ pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretR
         // it (`resolve_builtin` tested a file only for emptiness): a PEM chain's trailing newline
         // is part of the secret, and a binary secret need not be UTF-8.
         r => r,
+    }
+}
+
+/// The instance settings (`secrets.file.settings`) as this source takes them: none. Empty bytes or
+/// an empty object open it; anything else is refused naming why, at `validate`, `open` and
+/// `refresh` alike, rather than ignored.
+///
+/// # Errors
+/// The settings are not a JSON object, or name a setting.
+pub fn instance_settings(bytes: &[u8]) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Ok(serde_json::Value::Object(m)) => match m.keys().next() {
+            None => Ok(()),
+            Some(k) => Err(format!(
+                "secret module 'file' takes no settings; remove settings.{k} (each reference \
+                 names its file in its own settings.path)"
+            )),
+        },
+        _ => Err("settings: must be a JSON object".to_string()),
     }
 }
 
