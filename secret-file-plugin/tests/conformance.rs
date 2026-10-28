@@ -395,6 +395,39 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
     assert_eq!(linked["close"], "Ready lease=false ");
 }
 
+/// RED (row 159, audit A MEDIUM): a file above the secret kind's answer bound (`HARD_MAX_BYTES`)
+/// answers FAILED through either door, naming the path and the cause, with no lease. Answered
+/// READY, the host's answer check made it a bare FAULT naming neither, and the plugin's lease was
+/// never released. RED before the fix: `Fault lease=false`.
+#[test]
+fn a_file_above_the_answer_bound_answers_failed_naming_the_path() {
+    use busbar_contract::abi::mechanism::check::HARD_MAX_BYTES;
+    let dir = std::env::temp_dir().join(format!(
+        "busbar-secret-file-conformance-bound-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("the fixture directory");
+    let over = dir.join("over");
+    let f = std::fs::File::create(&over).expect("the over-bound fixture");
+    f.set_len(HARD_MAX_BYTES + 1).expect("its length");
+    drop(f);
+    let over = over.to_string_lossy().into_owned();
+    let d = dispatcher();
+    for p in [linked(&d), dropped(&d)] {
+        assert_eq!(open(&p), "Ready lease=false ");
+        assert_eq!(
+            resolve(&p, &format!(r#"{{"path":"{over}"}}"#)),
+            format!(
+                "Failed lease=false secret file:{over} cannot resolve: the file is larger than \
+                 {HARD_MAX_BYTES} bytes, the most a secret may hold (fail-closed) kind=4 \
+                 material=\"\""
+            )
+        );
+        assert_eq!(close(&p), "Ready lease=false ");
+    }
+    std::fs::remove_file(&over).ok();
+}
+
 /// RED: the door asked for as another kind is refused, by either origin.
 #[test]
 fn a_wrong_kind_is_refused() {
