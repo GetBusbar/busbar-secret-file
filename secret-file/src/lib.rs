@@ -16,7 +16,7 @@
 //!
 //! Refused: a missing path, an EMPTY file (`cannot resolve: <cause>`), a file that is not regular, a
 //! reference naming a setting other than `path`, and instance settings, which this source takes
-//! none of ([`instance_settings`]). A whitespace-only file resolves to its bytes. The one bound is the secret kind's own: a file above
+//! none of (the SDK's `takes_no_settings`, naming [`NAMES`]). A whitespace-only file resolves to its bytes. The one bound is the secret kind's own: a file above
 //! `HARD_MAX_BYTES` is an answer the host cannot take, so it is refused naming the path. No refusal
 //! carries the file's content.
 
@@ -24,10 +24,6 @@
 
 use busbar_contract::abi::mechanism::check::HARD_MAX_BYTES;
 use busbar_contract::abi::sdk::cred::Held;
-use busbar_contract::abi::secret::{
-    ERROR_KIND_DENIED, ERROR_KIND_INTERNAL, ERROR_KIND_INVALID, ERROR_KIND_NOT_FOUND,
-    ERROR_KIND_UNAVAILABLE,
-};
 use busbar_contract::secret::{SecretErrorKind, SecretModuleError, SecretResult};
 
 pub mod door;
@@ -38,6 +34,10 @@ pub const WORD: &str = "file";
 
 /// The settings key the sugar's value lands under (`{ file: X }` → `settings.path`).
 pub const KEY: &str = "path";
+
+/// Where a reference names its value, as a refusal of instance settings says it (the SDK's
+/// `takes_no_settings`, at `validate`, `open` and `refresh` alike).
+pub const NAMES: &str = "file in its own settings.path";
 
 /// The plugin's name (the manifest name).
 pub const NAME: &str = "busbar-secret-file";
@@ -220,53 +220,6 @@ pub fn resolve(
         // Any other content resolves untouched, a whitespace-only file included: a PEM
         // chain's trailing newline is part of the secret, and a binary secret need not be UTF-8.
         r => r,
-    }
-}
-
-/// The instance settings (`secrets.file.settings`) as this source takes them: none. Empty bytes or
-/// an empty object open it; anything else is refused naming why, at `validate`, `open` and
-/// `refresh` alike, rather than ignored.
-///
-/// # Errors
-/// The settings are not a JSON object, or name a setting.
-pub fn instance_settings(bytes: &[u8]) -> Result<(), String> {
-    if bytes.is_empty() {
-        return Ok(());
-    }
-    match serde_json::from_slice::<serde_json::Value>(bytes) {
-        Ok(serde_json::Value::Object(m)) => match m.keys().next() {
-            None => Ok(()),
-            Some(k) => Err(format!(
-                "secret module 'file' takes no settings; remove settings.{k} (each reference \
-                 names its file in its own settings.path)"
-            )),
-        },
-        _ => Err("settings: must be a JSON object".to_string()),
-    }
-}
-
-/// A resolve's settings bytes as the JSON object they must be (empty = none).
-///
-/// # Errors
-/// The bytes are not a JSON object.
-pub fn settings_of(bytes: &[u8]) -> SecretResult<serde_json::Map<String, serde_json::Value>> {
-    if bytes.is_empty() {
-        return Ok(serde_json::Map::new());
-    }
-    serde_json::from_slice(bytes).map_err(|e| {
-        SecretModuleError::invalid(format!("secret settings are not a JSON object: {e}"))
-    })
-}
-
-/// The `abi::secret::ERROR_KIND_*` code of a [`SecretErrorKind`].
-#[must_use]
-pub const fn error_kind(kind: SecretErrorKind) -> u32 {
-    match kind {
-        SecretErrorKind::NotFound => ERROR_KIND_NOT_FOUND,
-        SecretErrorKind::Unavailable => ERROR_KIND_UNAVAILABLE,
-        SecretErrorKind::Denied => ERROR_KIND_DENIED,
-        SecretErrorKind::Invalid => ERROR_KIND_INVALID,
-        SecretErrorKind::Internal => ERROR_KIND_INTERNAL,
     }
 }
 

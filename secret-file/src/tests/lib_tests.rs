@@ -6,7 +6,14 @@
 
 use super::*;
 use busbar_contract::abi::mechanism::check::HARD_MAX_BYTES;
+use busbar_contract::abi::sdk::secret::{error_kind, settings_of, takes_no_settings};
+use busbar_contract::abi::secret::{ERROR_KIND_INVALID, ERROR_KIND_NOT_FOUND};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// The instance settings as the door judges them (`validate`, `open`, `refresh`).
+fn instance_settings(bytes: &[u8]) -> Result<(), String> {
+    takes_no_settings(bytes, WORD, NAMES)
+}
 
 /// A process-unique temp path, so parallel tests never share one.
 fn temp_path(tag: &str) -> std::path::PathBuf {
@@ -124,7 +131,7 @@ fn a_file_above_the_answer_bound_is_refused_naming_the_path() {
     let f = std::fs::File::create(&p).unwrap();
     f.set_len(HARD_MAX_BYTES + 1).unwrap();
     drop(f);
-    let e = resolve(&path(&p)).unwrap_err();
+    let e = resolve(&path(&p)).err().expect("refused");
     std::fs::remove_file(&p).ok();
     assert_eq!(e.message, over_bound_text(&p.display().to_string()));
     assert_eq!(error_kind(e.kind), ERROR_KIND_INVALID);
@@ -141,7 +148,10 @@ fn a_file_at_the_answer_bound_resolves_whole() {
     std::fs::remove_file(&p).ok();
     let got = got.expect("a file at the bound resolves");
     assert_eq!(got.len() as u64, HARD_MAX_BYTES);
-    assert!(got.iter().all(|&b| b == 0));
+    assert!(
+        got == Held::new(vec![0_u8; got.len()]),
+        "the file's bytes, whole"
+    );
 }
 
 /// RED (Q128 secret-file LOW): the open itself never blocks on a fifo. The handle is opened

@@ -6,8 +6,8 @@
 //! `resolve` is a [`SafeSlot`] — no `unsafe` in this crate.
 //!
 //! * `validate`, `open`, `refresh` — the source holds no settings and no state: empty settings or
-//!   an empty object open it, and any setting is refused naming it ([`crate::instance_settings`]),
-//!   the same at all three.
+//!   an empty object open it, and any setting is refused naming it (the SDK's
+//!   [`takes_no_settings`]), the same at all three.
 //! * `resolve` — a reference's `{ path: PATH }` to the file's bytes, written by the SDK
 //!   ([`resolved`]) into the host's zeroed buffer (no lease, no copy left behind; a file over the
 //!   host's buffer is the short-buffer answer), or FAILED with its `ERROR_KIND_*` and its text. It
@@ -22,10 +22,9 @@ use busbar_contract::abi::mechanism::door::{
 use busbar_contract::abi::sdk::cred::resolved;
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::life::{Held, Life, Refreshed, Refusal};
+use busbar_contract::abi::sdk::secret::{failed, settings_of, takes_no_settings};
 use busbar_contract::abi::sdk::{Instance, Lent, Out, Safe, SafeSlot};
 use busbar_contract::abi::secret::{cancel, ResolveIn, ResolveOut};
-
-use crate::{error_kind, settings_of};
 
 /// A rewrite naming this source by its word ([`crate::WORD`]), in `class`, carrying `to`.
 const fn rewrite(class: u32, to: &'static str) -> Rewrite {
@@ -64,7 +63,7 @@ impl Life for File {
     const CANCEL: u32 = cancel::ABORTED;
 
     fn validate(settings: &[u8]) -> Result<(), Refusal> {
-        crate::instance_settings(settings).map_err(Refusal::failed)
+        takes_no_settings(settings, crate::WORD, crate::NAMES).map_err(Refusal::failed)
     }
 
     fn open(settings: &[u8], _: &[&[u8]], _: u64) -> Result<Self, Refusal> {
@@ -94,10 +93,7 @@ impl SafeSlot for Resolve {
         let settings = input.field(|i| &i.settings).bytes();
         match settings_of(settings).and_then(|s| crate::resolve(&s)) {
             Ok(material) => resolved(input, &mut out, material),
-            Err(e) => {
-                out.set(|o| &o.error_kind, error_kind(e.kind));
-                out.fail(Refusal::failed(e.message))
-            }
+            Err(e) => failed(&mut out, e),
         }
     }
 }
