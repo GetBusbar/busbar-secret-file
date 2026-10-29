@@ -409,7 +409,14 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
         ),
         "a value over the host's buffer is the short-buffer answer"
     );
-    assert_eq!(linked["release_unknown"], "Refused lease=false ");
+    assert_eq!(
+        linked["release_unknown"],
+        format!(
+            "Refused lease=false {}",
+            busbar_contract::abi::sdk::life::NO_SUCH_LEASE
+        ),
+        "a release of a lease the instance does not hold is refused naming why (the SDK's)"
+    );
     assert_eq!(
         linked["refresh_refused"],
         "Failed lease=false secret module 'file' takes no settings; remove settings.path (each reference names its file in its own settings.path)",
