@@ -9,9 +9,10 @@
 //! loader's `load_linked`) and DROPPED IN (this crate's built cdylib, `dlopen`ed by the loader's
 //! `load_dropped`, which resolves `busbar_plugin_door` and validates the door). Each is bound to a
 //! real dispatcher and driven over the same script through the secret kind's table: `validate`,
-//! `open`, `resolve` over a present, a missing, an empty and a malformed reference, `release` of the
-//! granted lease and of one never granted, `refresh`, `tick`, `close`. The two transcripts must be
-//! equal, and the resolved value is read out of the lease the READY answer names.
+//! `open`, `resolve` over a present, a missing, an empty and a malformed reference, `release` of a
+//! lease never granted, `refresh`, `tick`, `close`. The two transcripts must be equal, and the
+//! resolved value is read out of the HOST'S buffer the call lent (the credential chip, row 6:
+//! host-owned secret bytes), under no lease.
 //!
 //! The dropped-in door is admitted against the Statement rendering `busbar-plugin-pack` signs into
 //! its manifest (`rendering_of_library`, read off the built cdylib); the linked row states its own
@@ -188,19 +189,24 @@ fn refresh_with(p: &Plugin<Secret>, settings: Blob) -> String {
     spelled(&p.call(lc::REFRESH, &mut f))
 }
 
-/// One resolve: its answer, its error kind, the material it leased (read out of the lease), and
-/// the lease released.
-fn resolve(p: &Plugin<Secret>, settings: &str) -> String {
+/// One resolve into a zeroed host buffer of `cap` bytes: its answer, its error kind, the material
+/// it wrote (read out of the host's buffer, which the answer must name) and the `needed` a short
+/// answer states.
+fn resolve_into(p: &Plugin<Secret>, settings: &str, cap: usize) -> String {
+    let mut buf = vec![0_u8; cap];
     let mut f = Frame::new(
         ResolveIn {
             head: in_head(),
             settings: json(settings.as_bytes()),
+            secret_buf: buf.as_mut_ptr(),
+            secret_cap: buf.len(),
         },
         ResolveOut {
             head: out_head(),
             secret: NO_BLOB,
             error_kind: 0,
             _reserved: 0,
+            needed: 0,
         },
     );
     let c = p.call(secret::slot::RESOLVE, &mut f);
@@ -208,21 +214,29 @@ fn resolve(p: &Plugin<Secret>, settings: &str) -> String {
     let material = if blob.ptr.is_null() || blob.len == 0 {
         String::new()
     } else {
-        // SAFETY: a READY resolve's `secret` names plugin memory held under the answer's lease
-        // until `release`, which runs below, after this copy.
-        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(blob.ptr, blob.len) })
-            .into_owned()
+        assert_eq!(
+            blob.ptr,
+            buf.as_ptr(),
+            "a READY value is in the host's buffer"
+        );
+        String::from_utf8_lossy(&buf[..blob.len]).into_owned()
     };
-    let released = if c.lease == 0 {
+    buf.fill(0);
+    let needed = if f.out.needed == 0 {
         String::new()
     } else {
-        format!(" released={}", release(p, c.lease))
+        format!(" needed={}", f.out.needed)
     };
     format!(
-        "{} kind={} material={material:?}{released}",
+        "{} kind={} material={material:?}{needed}",
         spelled(&c),
         f.out.error_kind
     )
+}
+
+/// [`resolve_into`] the host's first buffer.
+fn resolve(p: &Plugin<Secret>, settings: &str) -> String {
+    resolve_into(p, settings, secret::FIRST_SECRET_CAP)
 }
 
 fn release(p: &Plugin<Secret>, lease: u64) -> String {
@@ -278,6 +292,8 @@ fn transcript(p: &Plugin<Secret>) -> serde_json::Value {
     .iter()
     .map(|s| resolve(p, s))
     .collect();
+    // A buffer one byte short of the value: the short-buffer answer, nothing written.
+    let short = resolve_into(p, &format!(r#"{{"path":"{set}"}}"#), VALUE.len() - 1);
     serde_json::json!({
         "name": p.name(),
         "kind": format!("{:?}", p.kind()),
@@ -287,6 +303,7 @@ fn transcript(p: &Plugin<Secret>) -> serde_json::Value {
         "open": opened,
         "open_again": opened_again,
         "resolve": resolved,
+        "resolve_short": short,
         "release_unknown": release(p, 42),
         "refresh_refused": refresh_with(p, json(br#"{"path":"/x"}"#)),
         "refresh": refresh(p),
@@ -376,7 +393,7 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
     assert_eq!(
         resolved,
         serde_json::json!([
-            format!("Ready lease=true  kind=0 material={VALUE:?} released=Ready lease=false "),
+            format!("Ready lease=false  kind=0 material={VALUE:?}"),
             format!("Failed lease=false secret file:{unset} cannot resolve: {} kind=1 material=\"\"", std::fs::File::open(&unset).expect_err("the missing fixture is missing")),
             format!("Failed lease=false secret file:{empty} resolved to an EMPTY file; a secret must be non-empty (fail-closed) kind=4 material=\"\""),
             "Failed lease=false secret module 'file' requires settings.path naming the file (e.g. `{ file: /run/secrets/x }` or `{ module: file, settings: { path: /run/secrets/x } }`) kind=4 material=\"\"",
@@ -384,7 +401,22 @@ fn the_linked_and_the_dropped_in_file_plugin_are_one_plugin() {
             "Failed lease=false secret module 'file' does not take settings.key; a reference names only settings.path (fail-closed) kind=4 material=\"\"",
         ])
     );
-    assert_eq!(linked["release_unknown"], "Refused lease=false ");
+    assert_eq!(
+        linked["resolve_short"],
+        format!(
+            "Failed lease=false  kind=0 material=\"\" needed={}",
+            VALUE.len()
+        ),
+        "a value over the host's buffer is the short-buffer answer"
+    );
+    assert_eq!(
+        linked["release_unknown"],
+        format!(
+            "Refused lease=false {}",
+            busbar_contract::abi::sdk::life::NO_SUCH_LEASE
+        ),
+        "a release of a lease the instance does not hold is refused naming why (the SDK's)"
+    );
     assert_eq!(
         linked["refresh_refused"],
         "Failed lease=false secret module 'file' takes no settings; remove settings.path (each reference names its file in its own settings.path)",
@@ -484,7 +516,7 @@ fn a_statement_mismatch_is_refused() {
 // package root), the unknown one a path no file holds. Every step's crossings exactly at the
 // script's pin, the two folds equal, and the suite's RED arms kept. `plugin-ci.yml` runs it under
 // `--release`.
-busbar_plugin_loader::conformance_suite! {
+busbar_test_kit::conformance_suite! {
     door: busbar_secret_file::door::door,
     cdylib: "busbar_secret_file_plugin",
     inputs: include_str!("conformance.json"),

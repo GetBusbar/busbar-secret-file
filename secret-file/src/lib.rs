@@ -16,17 +16,14 @@
 //!
 //! Refused: a missing path, an EMPTY file (`cannot resolve: <cause>`), a file that is not regular, a
 //! reference naming a setting other than `path`, and instance settings, which this source takes
-//! none of ([`instance_settings`]). A whitespace-only file resolves to its bytes. The one bound is the secret kind's own: a file above
+//! none of (the SDK's `takes_no_settings`, naming [`NAMES`]). A whitespace-only file resolves to its bytes. The one bound is the secret kind's own: a file above
 //! `HARD_MAX_BYTES` is an answer the host cannot take, so it is refused naming the path. No refusal
 //! carries the file's content.
 
 #![forbid(unsafe_code)]
 
 use busbar_contract::abi::mechanism::check::HARD_MAX_BYTES;
-use busbar_contract::abi::secret::{
-    ERROR_KIND_DENIED, ERROR_KIND_INTERNAL, ERROR_KIND_INVALID, ERROR_KIND_NOT_FOUND,
-    ERROR_KIND_UNAVAILABLE,
-};
+use busbar_contract::abi::sdk::cred::Held;
 use busbar_contract::secret::{SecretErrorKind, SecretModuleError, SecretResult};
 
 pub mod door;
@@ -37,6 +34,10 @@ pub const WORD: &str = "file";
 
 /// The settings key the sugar's value lands under (`{ file: X }` → `settings.path`).
 pub const KEY: &str = "path";
+
+/// Where a reference names its value, as a refusal of instance settings says it (the SDK's
+/// `takes_no_settings`, at `validate`, `open` and `refresh` alike).
+pub const NAMES: &str = "file in its own settings.path";
 
 /// The plugin's name (the manifest name).
 pub const NAME: &str = "busbar-secret-file";
@@ -88,10 +89,11 @@ fn not_regular(md: &std::fs::Metadata) -> std::io::Error {
 /// BOUNDED by [`MAX`]: a file whose length is above it is refused before a byte is read, and one
 /// that grows past it mid-read once it has yielded one byte past it. Nothing above it is answered.
 ///
-/// The bytes are WIPED on every path but the one that hands them back: they are read into a wiped buffer sized from the handle's length, a
-/// file that grows mid-read moves into a larger wiped buffer (the old one wiped as it goes), and
-/// an I/O error or the bound mid-read drops what was read wiped.
-fn read_file(path: &str) -> SecretResult<Vec<u8>> {
+/// The bytes are WIPED on every path: they are read into a wiped buffer sized from the handle's
+/// length, a file that grows mid-read moves into a larger wiped buffer (the old one wiped as it
+/// goes), an I/O error or the bound mid-read drops what was read wiped, and what is read is MOVED
+/// (never copied) into the zeroizing [`Held`] it answers.
+fn read_file(path: &str) -> SecretResult<Held<Vec<u8>>> {
     use std::io::Read;
     use zeroize::Zeroizing;
 
@@ -141,7 +143,7 @@ fn read_file(path: &str) -> SecretResult<Vec<u8>> {
         }
         buf.extend_from_slice(&chunk[..n]);
     }
-    Ok(std::mem::take(&mut *buf))
+    Ok(Held::new(std::mem::take(&mut *buf)))
 }
 
 /// The refusal an I/O error reads as: its code, and a text naming the path and the cause.
@@ -181,13 +183,16 @@ fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
     SecretModuleError::new(kind, format!("secret file:{path} cannot resolve: {e}"))
 }
 
-/// Resolve `settings` (`{ path: PATH }`) to the file's bytes, untouched.
+/// Resolve `settings` (`{ path: PATH }`) to the file's bytes, untouched, in a zeroizing [`Held`]
+/// (no getter: it reaches the host only through the SDK's `resolve` answer).
 ///
 /// # Errors
 /// Fail-closed: a missing, unreadable or empty file is refused, and so is a missing or
 /// blank `path`; a non-regular file is refused by name, and so is a reference naming any setting
 /// but `path`. The text names the path, never the content.
-pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretResult<Vec<u8>> {
+pub fn resolve(
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> SecretResult<Held<Vec<u8>>> {
     let path = match settings.get(KEY).and_then(|v| v.as_str()) {
         Some(p) if !p.trim().is_empty() => p,
         _ => {
@@ -215,53 +220,6 @@ pub fn resolve(settings: &serde_json::Map<String, serde_json::Value>) -> SecretR
         // Any other content resolves untouched, a whitespace-only file included: a PEM
         // chain's trailing newline is part of the secret, and a binary secret need not be UTF-8.
         r => r,
-    }
-}
-
-/// The instance settings (`secrets.file.settings`) as this source takes them: none. Empty bytes or
-/// an empty object open it; anything else is refused naming why, at `validate`, `open` and
-/// `refresh` alike, rather than ignored.
-///
-/// # Errors
-/// The settings are not a JSON object, or name a setting.
-pub fn instance_settings(bytes: &[u8]) -> Result<(), String> {
-    if bytes.is_empty() {
-        return Ok(());
-    }
-    match serde_json::from_slice::<serde_json::Value>(bytes) {
-        Ok(serde_json::Value::Object(m)) => match m.keys().next() {
-            None => Ok(()),
-            Some(k) => Err(format!(
-                "secret module 'file' takes no settings; remove settings.{k} (each reference \
-                 names its file in its own settings.path)"
-            )),
-        },
-        _ => Err("settings: must be a JSON object".to_string()),
-    }
-}
-
-/// A resolve's settings bytes as the JSON object they must be (empty = none).
-///
-/// # Errors
-/// The bytes are not a JSON object.
-pub fn settings_of(bytes: &[u8]) -> SecretResult<serde_json::Map<String, serde_json::Value>> {
-    if bytes.is_empty() {
-        return Ok(serde_json::Map::new());
-    }
-    serde_json::from_slice(bytes).map_err(|e| {
-        SecretModuleError::invalid(format!("secret settings are not a JSON object: {e}"))
-    })
-}
-
-/// The `abi::secret::ERROR_KIND_*` code of a [`SecretErrorKind`].
-#[must_use]
-pub const fn error_kind(kind: SecretErrorKind) -> u32 {
-    match kind {
-        SecretErrorKind::NotFound => ERROR_KIND_NOT_FOUND,
-        SecretErrorKind::Unavailable => ERROR_KIND_UNAVAILABLE,
-        SecretErrorKind::Denied => ERROR_KIND_DENIED,
-        SecretErrorKind::Invalid => ERROR_KIND_INVALID,
-        SecretErrorKind::Internal => ERROR_KIND_INTERNAL,
     }
 }
 
