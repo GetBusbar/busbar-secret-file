@@ -178,7 +178,13 @@ fn a_fifo_is_refused_at_once_never_waited_on() {
     let e = answered
         .expect("the open answered without waiting for a writer")
         .expect_err("a fifo is refused");
-    assert!(e.message.contains("is not a regular file"), "{}", e.message);
+    assert_eq!(e.kind, SecretErrorKind::Invalid);
+    assert!(
+        e.message
+            .contains("is not a regular file (it is a device node or fifo)"),
+        "{}",
+        e.message
+    );
 }
 
 #[test]
@@ -186,6 +192,7 @@ fn a_directory_is_refused_as_not_a_regular_file() {
     let d = temp_path("dir");
     std::fs::create_dir_all(&d).unwrap();
     let e = resolve(&path(&d)).err().expect("refused");
+    assert_eq!(e.kind, SecretErrorKind::Invalid);
     assert!(
         e.message
             .contains("is not a regular file (it is a directory)"),
@@ -426,4 +433,126 @@ fn instance_settings_are_none_and_a_setting_is_refused_naming_it() {
             String::from_utf8_lossy(bad)
         );
     }
+}
+
+/// RED (codeaudit secret-file LOW): a directory the process may not open is refused as a
+/// directory (INVALID, the not-regular text), not as a bare DENIED "Permission denied" that never
+/// says the operator pointed the credential at a folder. (On Windows every directory open fails
+/// this way.) RED before the fix: it answered DENIED.
+#[cfg(unix)]
+#[test]
+fn an_unopenable_directory_is_refused_as_a_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    // Root opens anything, so the open would not be denied. `libc::geteuid` is unsafe and this
+    // crate forbids unsafe, so read the effective uid off the owner of a file just created.
+    let probe = temp_path("euid-probe");
+    std::fs::write(&probe, b"x").unwrap();
+    let root = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&probe).unwrap()) == 0;
+    let _ = std::fs::remove_file(&probe);
+    if root {
+        return;
+    }
+    let d = temp_path("dir-denied");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let e = resolve(&path(&d));
+    std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let _ = std::fs::remove_dir(&d);
+    let e = e.err().expect("refused");
+    assert_eq!(e.kind, SecretErrorKind::Invalid, "{}", e.message);
+    assert!(
+        e.message
+            .contains("is not a regular file (it is a directory)"),
+        "{}",
+        e.message
+    );
+}
+
+/// A reader yielding `left` copies of one byte, in whatever sizes it is asked for, then either the
+/// end or an I/O error.
+struct Repeat {
+    left: usize,
+    byte: u8,
+    then_err: bool,
+}
+
+impl std::io::Read for Repeat {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.left == 0 {
+            return if self.then_err {
+                Err(std::io::Error::from(std::io::ErrorKind::TimedOut))
+            } else {
+                Ok(0)
+            };
+        }
+        let n = self.left.min(out.len());
+        out[..n].fill(self.byte);
+        self.left -= n;
+        Ok(n)
+    }
+}
+
+/// The mid-read bound: a reader that outruns a stated length of 0 is refused one byte past MAX,
+/// naming the path.
+#[test]
+fn a_reader_past_the_bound_mid_read_is_refused_naming_the_path() {
+    let mut r = Repeat {
+        left: MAX + 1,
+        byte: b'z',
+        then_err: false,
+    };
+    let e = read_bounded(&mut r, 0, "/p/over").err().expect("refused");
+    assert_eq!(e.message, over_bound_text("/p/over"));
+    assert_eq!(e.kind, SecretErrorKind::Invalid);
+}
+
+/// NEGATIVE CONTROL for the mid-read bound: exactly MAX bytes against a stated length of 0
+/// resolves whole.
+#[test]
+fn a_reader_at_the_bound_mid_read_resolves_whole() {
+    let mut r = Repeat {
+        left: MAX,
+        byte: b'q',
+        then_err: false,
+    };
+    let got = read_bounded(&mut r, 0, "/p/at").expect("resolves");
+    assert_eq!(got.len(), MAX);
+    assert!(got == Held::new(vec![b'q'; MAX]));
+}
+
+/// An I/O error after some bytes is refused with the io text, kind by [`io_refusal`].
+#[test]
+fn a_reader_failing_mid_read_is_refused_with_the_io_text() {
+    let mut r = Repeat {
+        left: 20_000,
+        byte: b'e',
+        then_err: true,
+    };
+    let e = read_bounded(&mut r, 0, "/p/err").err().expect("refused");
+    assert_eq!(e.kind, SecretErrorKind::Unavailable);
+    assert_eq!(
+        e.message,
+        format!(
+            "secret file:/p/err cannot resolve: {}",
+            std::io::Error::from(std::io::ErrorKind::TimedOut)
+        )
+    );
+}
+
+/// A stated length smaller than the data forces the growth branch; every byte survives it.
+#[test]
+fn a_reader_longer_than_its_hint_grows_and_resolves_whole() {
+    let data: Vec<u8> = (0..100_000_u32).map(|i| (i % 251) as u8).collect();
+    struct Slice<'a>(&'a [u8]);
+    impl std::io::Read for Slice<'_> {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.0.len().min(out.len());
+            out[..n].copy_from_slice(&self.0[..n]);
+            self.0 = &self.0[n..];
+            Ok(n)
+        }
+    }
+    let got = read_bounded(&mut Slice(&data), 10, "/p/grow").expect("resolves");
+    assert_eq!(got.len(), data.len());
+    assert!(got == Held::new(data));
 }

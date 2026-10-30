@@ -12,7 +12,11 @@ First-party signed kind:secret plugin cdylib: the file secret source (`{ file: /
 
 ## What it is for
 
-`busbar-secret-file` is a `kind: secret` busbar plugin.
+`busbar-secret-file` is a `kind: secret` busbar plugin. It resolves a secret reference `{ file: PATH }`
+to the bytes of the regular file at `PATH`, untouched.
+
+It needs the disk, so the host resolves it at config time on its disk lane. It is linked in busbar's
+default build and also ships as a droppable cdylib for builds without it.
 
 ## Config
 
@@ -20,7 +24,7 @@ Configured under the `file` module name. A secret reference is `{ file: /run/sec
 `{ module: file, settings: { path: ... } }`; it resolves to the bytes of the regular file named by `path`, untouched (a trailing newline is part of the secret).
 
 A reference names `path` and nothing else: a missing or blank `path` fails INVALID, and so does
-any other setting, named in the refusal. A missing file fails NOT_FOUND, an unreadable one DENIED, a transient I/O failure UNAVAILABLE; an empty file, a directory and a device node or fifo fail INVALID. The bytes are read into wiped buffers. The source declares the disk need (`declares.json`), so the host resolves it only at config time. No refusal carries the secret.
+any other setting, named in the refusal. A missing file fails NOT_FOUND, an unreadable one DENIED, a transient I/O failure UNAVAILABLE; an empty file, a directory (on every platform, including one the process may not open) and a device node or fifo fail INVALID, and so does a file over 16 MiB (`HARD_MAX_BYTES`, not configurable), refused naming the path. The open follows symlinks (Kubernetes projects secrets as symlinks into a `..data/` directory). The bytes are read into wiped buffers. The source declares the disk need (`declares.json`), so the host resolves it only at config time. No refusal carries the secret.
 
 The source takes no instance settings (`secrets.file.settings`): none or `{}` opens it, and any
 setting is refused naming it, at `validate`, `open` and `refresh` alike.

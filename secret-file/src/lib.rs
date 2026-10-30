@@ -14,8 +14,8 @@
 //! disk, so its declares document ([`DECLARES`]) states the disk need: the host runs its `resolve`
 //! on the bounded disk lane, at config time only.
 //!
-//! Refused: a missing path, an EMPTY file (`cannot resolve: <cause>`), a file that is not regular, a
-//! reference naming a setting other than `path`, and instance settings, which this source takes
+//! Refused: a missing path, an EMPTY file (`resolved to an EMPTY file; ...`), a file that is not regular or cannot be read
+//! (`cannot resolve: <cause>`, the I/O refusals' text), a reference naming a setting other than `path`, and instance settings, which this source takes
 //! none of (the SDK's `takes_no_settings`, naming [`NAMES`]). A whitespace-only file resolves to its bytes. The one bound is the secret kind's own: a file above
 //! `HARD_MAX_BYTES` is an answer the host cannot take, so it is refused naming the path. No refusal
 //! carries the file's content.
@@ -94,9 +94,6 @@ fn not_regular(md: &std::fs::Metadata) -> std::io::Error {
 /// goes), an I/O error or the bound mid-read drops what was read wiped, and what is read is MOVED
 /// (never copied) into the zeroizing [`Held`] it answers.
 fn read_file(path: &str) -> SecretResult<Held<Vec<u8>>> {
-    use std::io::Read;
-    use zeroize::Zeroizing;
-
     let io = |e: std::io::Error| io_refusal(path, &e);
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -105,7 +102,18 @@ fn read_file(path: &str) -> SecretResult<Held<Vec<u8>>> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
     }
-    let mut file = options.open(path).map_err(io)?;
+    let mut file = match options.open(path) {
+        Ok(f) => f,
+        // A directory the process may not open (on Windows every directory open fails this way)
+        // is still a directory: say so, as the opened-handle check below does.
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(match std::fs::metadata(path) {
+                Ok(md) if md.is_dir() => io(not_regular(&md)),
+                _ => io(e),
+            })
+        }
+        Err(e) => return Err(io(e)),
+    };
     let md = file.metadata().map_err(io)?;
     if !md.is_file() {
         return Err(io(not_regular(&md)));
@@ -113,16 +121,25 @@ fn read_file(path: &str) -> SecretResult<Held<Vec<u8>>> {
     if md.len() > HARD_MAX_BYTES {
         return Err(over_bound(path));
     }
+    read_bounded(&mut file, md.len(), path)
+}
+
+/// The bounded, wiped read loop of [`read_file`], over any reader: `hint` is the length the opened
+/// handle stated (it sizes the first buffer; a reader may yield more or fewer bytes than it).
+fn read_bounded(r: &mut impl std::io::Read, hint: u64, path: &str) -> SecretResult<Held<Vec<u8>>> {
+    use zeroize::Zeroizing;
+
+    let io = |e: std::io::Error| io_refusal(path, &e);
     // FALLIBLE (`try_reserve_exact`, as `std::fs::read` does): memory the read cannot
     // get is refused with the allocator's error, never an abort of the process.
-    let len = usize::try_from(md.len()).unwrap_or(MAX);
+    let len = usize::try_from(hint).unwrap_or(MAX);
     let mut buf = Zeroizing::new(Vec::new());
     buf.try_reserve_exact(len.saturating_add(1))
         .map_err(|e| io(e.into()))?;
     let mut chunk = Zeroizing::new([0_u8; 8192]);
     loop {
         // An interrupted read is retried, as `read_to_end` retried it.
-        let n = match file.read(&mut chunk[..]) {
+        let n = match r.read(&mut chunk[..]) {
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             r => r.map_err(io)?,
         };
