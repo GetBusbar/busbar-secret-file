@@ -467,8 +467,16 @@ fn a_wrong_kind_is_refused() {
     let row = LinkedRow::of(busbar_secret_file::door::door).expect("the linked row states");
     let err =
         load_linked::<Export>(&row, bind(&d)).expect_err("a secret door is not an export door");
-    let said = format!("{err:?}");
-    assert!(said.contains("Secret") || said.contains("Kind"), "{said}");
+    assert!(
+        matches!(
+            err,
+            LoadError::WrongKind {
+                door: KindCode::Secret,
+                want: KindCode::Export
+            }
+        ),
+        "{err:?}"
+    );
 
     let as_export = stating(&[
         (1, KindCode::Export as u32),
@@ -476,7 +484,16 @@ fn a_wrong_kind_is_refused() {
     ]);
     let err = load_dropped::<Export>(&cdylib(), &as_export, bind(&d))
         .expect_err("the dropped-in secret door is not an export door");
-    assert!(!matches!(err, LoadError::ManifestKind { .. }), "{err:?}");
+    assert!(
+        matches!(
+            err,
+            LoadError::WrongKind {
+                door: KindCode::Secret,
+                want: KindCode::Export
+            }
+        ),
+        "{err:?}"
+    );
 }
 
 /// RED: a manifest whose statement disagrees with what is asked is refused before `dlopen`; one
