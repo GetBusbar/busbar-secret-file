@@ -1,0 +1,10 @@
+{
+  "credentials": ["sk-conformance", "s3cr3t-file-conformance"],
+  "settings": {},
+  "secret": {
+    "bad_settings": ["[1]"],
+    "known": { "resolve": { "path": "tests/conformance.secret" }, "material": "sk-conformance" },
+    "unknown": { "path": "tests/conformance.absent" },
+    "malformed": "[1]"
+  }
+}
