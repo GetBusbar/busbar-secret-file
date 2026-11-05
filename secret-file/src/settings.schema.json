@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "maxProperties": 0,
+  "additionalProperties": false,
+  "default": {},
+  "description": "No instance settings. Omit settings or supply an empty object; null and other JSON values are refused. Reference settings are supplied separately to check/resolve."
+}

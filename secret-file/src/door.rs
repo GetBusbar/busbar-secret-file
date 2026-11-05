@@ -36,9 +36,14 @@ const REWRITES: &[Rewrite] = &[
     rewrite(REWRITE_SUGAR_ROLE, "path"),
 ];
 
+/// The settings accepted by this plugin's lifecycle parser.
+const SETTINGS_SCHEMA: busbar_contract::abi::mechanism::call::Blob =
+    busbar_contract::abi::mechanism::call::Blob::json(include_bytes!("settings.schema.json"));
+
 /// This plugin's Statement: its name, version, the most resolves one instance holds in flight, and
 /// the names config gives it.
 pub const STATEMENT: Statement = Statement {
+    settings_schema: SETTINGS_SCHEMA,
     rewrites: REWRITES.as_ptr(),
     rewrites_len: REWRITES.len(),
     ..statement(crate::NAME, env!("CARGO_PKG_VERSION"), 16)
@@ -122,3 +127,7 @@ mod table {
 
 /// This plugin's door: the one a compiled-in build links and the dropped-in image exports.
 pub use table::{door, MACRO_DOOR};
+
+#[cfg(test)]
+#[path = "settings_schema_tests.rs"]
+mod settings_schema_tests;
