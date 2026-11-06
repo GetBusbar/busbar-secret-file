@@ -370,22 +370,26 @@ fn transcript(p: &Plugin<Secret>) -> serde_json::Value {
         validate(p, "[1]"),
         validate(p, r#"{"path":"/x"}"#),
     ];
-    let unopened = resolve(p, &format!(r#"{{"path":"{set}"}}"#));
+    let unopened = resolve(p, &serde_json::json!({"path": set}).to_string());
     let open_refused = open_with(p, json(br#"{"path":"/x"}"#));
     let (opened, opened_again) = (open(p), open(p));
     let resolved: Vec<String> = [
-        format!(r#"{{"path":"{set}"}}"#),
-        format!(r#"{{"path":"{unset}"}}"#),
-        format!(r#"{{"path":"{empty}"}}"#),
+        serde_json::json!({"path": set}).to_string(),
+        serde_json::json!({"path": unset}).to_string(),
+        serde_json::json!({"path": empty}).to_string(),
         r#"{"path":"  "}"#.to_string(),
         "[1]".to_string(),
-        format!(r#"{{"path":"{set}","key":"X"}}"#),
+        serde_json::json!({"path": set, "key": "X"}).to_string(),
     ]
     .iter()
     .map(|s| resolve(p, s))
     .collect();
 
-    let short = resolve_into(p, &format!(r#"{{"path":"{set}"}}"#), VALUE.len() - 1);
+    let short = resolve_into(
+        p,
+        &serde_json::json!({"path": set}).to_string(),
+        VALUE.len() - 1,
+    );
     serde_json::json!({
         "name": facts.0,
         "kind": facts.1,
@@ -542,7 +546,7 @@ fn a_file_above_the_answer_bound_answers_failed_naming_the_path() {
     for p in [linked(&d), dropped(&d)] {
         assert_eq!(open(&p), "Ready lease=false ");
         assert_eq!(
-            resolve(&p, &format!(r#"{{"path":"{over}"}}"#)),
+            resolve(&p, &serde_json::json!({"path": over}).to_string()),
             format!(
                 "Failed lease=false secret file:{over} cannot resolve: the file is larger than \
                  {HARD_MAX_BYTES} bytes, the most a secret may hold (fail-closed) kind=4 \
