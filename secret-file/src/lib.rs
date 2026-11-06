@@ -38,8 +38,23 @@ pub const DECLARES: &str = include_str!("../declares.json");
 /// `abi/mechanism/check.rs`), which the read refuses itself so the refusal names the path.
 const MAX: usize = HARD_MAX_BYTES as usize;
 
+/// `path` as a refusal names it: control characters (a kept newline, a CR, an ESC) escaped, so
+/// the refusal stays one well-formed line; any other path reads exactly as written.
+fn shown(path: &str) -> String {
+    path.chars()
+        .map(|c| {
+            if c.is_control() {
+                c.escape_debug().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
 /// The refusal a file above [`MAX`] reads as: the path and the bound, never the content.
 fn over_bound(path: &str) -> SecretModuleError {
+    let path = shown(path);
     SecretModuleError::invalid(format!(
         "secret file:{path} cannot resolve: the file is larger than {HARD_MAX_BYTES} bytes, the \
          most a secret may hold (fail-closed)"
@@ -49,8 +64,14 @@ fn over_bound(path: &str) -> SecretModuleError {
 /// What a path that is not a regular file is refused as (an `Other` error, so [`io_refusal`] makes
 /// it `Invalid` and names the path once, before `cannot resolve: `).
 fn not_regular(md: &std::fs::Metadata) -> std::io::Error {
+    #[cfg(unix)]
+    let socket = std::os::unix::fs::FileTypeExt::is_socket(&md.file_type());
+    #[cfg(not(unix))]
+    let socket = false;
     let kind = if md.is_dir() {
         "a directory"
+    } else if socket {
+        "a socket"
     } else {
         "a device node or fifo"
     };
@@ -160,6 +181,7 @@ fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
         | K::OutOfMemory => SecretErrorKind::Unavailable,
         _ => SecretErrorKind::Invalid,
     };
+    let path = shown(path);
     SecretModuleError::new(kind, format!("secret file:{path} cannot resolve: {e}"))
 }
 
@@ -202,8 +224,9 @@ pub(crate) fn reference_path(
 fn resolve_path(path: &str, seen: impl FnMut(&[u8])) -> SecretResult<Held<Vec<u8>>> {
     match read_file(path, seen) {
         Ok(bytes) if bytes.is_empty() => Err(SecretModuleError::invalid(format!(
-            "secret file:{path} resolved to an EMPTY file; a secret must be non-empty \
-             (fail-closed)"
+            "secret file:{} resolved to an EMPTY file; a secret must be non-empty \
+             (fail-closed)",
+            shown(path)
         ))),
 
         r => r,

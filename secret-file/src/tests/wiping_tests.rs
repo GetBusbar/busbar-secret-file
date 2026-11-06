@@ -77,8 +77,10 @@ fn growing_reads_wipe_every_old_buffer_and_the_resolved_value() {
     assert!(resolved == Held::new(vec![b's'; 40_000]));
     drop(resolved);
     let report = observed.finish();
+    // The chunk plus at least two generations of the growing buffer: one initialized buffer
+    // was outgrown (the chunk and one buffer alone register two).
     assert!(
-        report.allocations() > 1,
+        report.allocations() > 2,
         "the read actually outgrew an initialized buffer"
     );
     report.assert_wiped(&["file bytes"]);
@@ -102,7 +104,7 @@ fn a_read_failure_wipes_all_bytes_already_read() {
     drop(error);
     let report = observed.finish();
     assert!(
-        report.allocations() > 1,
+        report.allocations() > 2,
         "the failed read also exercised growth"
     );
     report.assert_wiped(&["file bytes"]);

@@ -679,3 +679,78 @@ fn a_first_buffer_no_allocation_can_hold_is_refused_not_an_abort() {
         e.message
     );
 }
+
+/// RED (codeaudit secret-file LOW): a path carrying control characters (a YAML block scalar's
+/// kept newline, a pasted CR or ESC) is named ESCAPED in every refusal, so the refusal stays one
+/// well-formed line and shows why the path did not match, as an unknown setting key already is.
+#[test]
+fn a_path_with_control_characters_is_named_escaped_in_a_well_formed_refusal() {
+    let missing = temp_path("ctl-missing");
+    let raw = format!("{}\n\u{1b}[2J\r", missing.display());
+    let mut settings = serde_json::Map::new();
+    settings.insert("path".into(), raw.clone().into());
+    let e = resolve(&settings).err().expect("refused");
+    assert_eq!(e.kind, SecretErrorKind::NotFound, "{}", e.message);
+    assert!(!e.message.chars().any(char::is_control), "{:?}", e.message);
+    assert!(
+        e.message.starts_with(&format!(
+            "secret file:{}\\n\\u{{1b}}[2J\\r cannot resolve: ",
+            missing.display()
+        )),
+        "{:?}",
+        e.message
+    );
+
+    // A file name holding a newline exists only where the filesystem allows one (not Windows).
+    #[cfg(unix)]
+    {
+        let empty = temp_path("ctl-empty\n");
+        std::fs::write(&empty, b"").unwrap();
+        let e = resolve(&path(&empty)).err().expect("refused");
+        let _ = std::fs::remove_file(&empty);
+        assert_eq!(e.kind, SecretErrorKind::Invalid, "{}", e.message);
+        assert!(e.message.contains("EMPTY"), "{:?}", e.message);
+        assert!(!e.message.chars().any(char::is_control), "{:?}", e.message);
+    }
+
+    let over = over_bound("/run/secrets/x\n");
+    assert!(
+        !over.message.chars().any(char::is_control),
+        "{:?}",
+        over.message
+    );
+}
+
+/// RED (codeaudit secret-file NIT): a unix socket is refused (INVALID, never opened) as what it
+/// is, not misnamed "a device node or fifo".
+#[cfg(unix)]
+#[test]
+fn a_socket_is_refused_as_a_socket() {
+    let sock = temp_path("sock");
+    let _ = std::fs::remove_file(&sock);
+    let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind the socket");
+    let e = resolve(&path(&sock));
+    drop(listener);
+    let _ = std::fs::remove_file(&sock);
+    let e = e.err().expect("refused");
+    assert_eq!(e.kind, SecretErrorKind::Invalid, "{}", e.message);
+    assert!(
+        e.message.contains("is not a regular file (it is a socket)"),
+        "{}",
+        e.message
+    );
+}
+
+/// A non-blank path is opened exactly as written: a name with leading and trailing spaces names
+/// that file, never its trimmed spelling (the blank check trims; the open must not).
+#[test]
+fn a_non_blank_path_is_opened_untrimmed() {
+    let dir = temp_path("untrimmed");
+    std::fs::create_dir_all(&dir).unwrap();
+    let spaced = dir.join(" key ");
+    std::fs::write(&spaced, b"spaced").unwrap();
+    std::fs::write(dir.join("key"), b"trimmed").unwrap();
+    let got = resolve(&path(&spaced));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(got.expect("resolves") == Held::new(b"spaced".to_vec()));
+}
