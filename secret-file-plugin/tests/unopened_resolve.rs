@@ -12,7 +12,6 @@ use std::ffi::c_void;
 use busbar_contract::abi::mechanism::call::{
     Blob, InHead, Op, OutHead, Outcome, RawOutcome, BLOB_JSON,
 };
-use busbar_contract::abi::mechanism::door::Door;
 use busbar_contract::abi::mechanism::lifecycle::{slot as lc, OpenIn, OpenOut};
 use busbar_contract::abi::secret::{self, Ops, ResolveIn, ResolveOut, ERROR_KIND_UNSET};
 use busbar_plugin_loader::dispatch::{in_head, out_head, NO_BLOB};
@@ -22,11 +21,7 @@ const VALUE: &[u8] = b"s3cr3t-unopened-resolve";
 /// The linked door's secret ops table.
 fn ops() -> &'static Ops {
     // SAFETY: `door()` is the SDK's static door; its `ops` is the static secret `Ops` table.
-    unsafe {
-        &*Door::read_parts(busbar_secret_file::door::door())
-            .ops
-            .cast::<Ops>()
-    }
+    unsafe { &*busbar_secret_file::door().parts().ops.cast::<Ops>() }
 }
 
 /// An `in` head for slot `op` of an `in` frame of type `T`.

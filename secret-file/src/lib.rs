@@ -13,18 +13,18 @@ use busbar_contract::abi::mechanism::check::HARD_MAX_BYTES;
 use busbar_contract::abi::sdk::cred::Held;
 use busbar_contract::secret::{SecretErrorKind, SecretModuleError, SecretResult};
 
-pub mod door;
+mod door;
 
 /// The word config names this source by: its module alias and its reference sugar
 /// (`{ file: X }`), spelled here, never by the contract.
-pub const WORD: &str = "file";
+pub(crate) const WORD: &str = "file";
 
 /// The settings key the sugar's value lands under (`{ file: X }` → `settings.path`).
-pub const KEY: &str = "path";
+pub(crate) const KEY: &str = "path";
 
 /// Where a reference names its value, as a refusal of instance settings says it (the SDK's
 /// `takes_no_settings`, at `validate`, `open` and `refresh` alike).
-pub const NAMES: &str = "file in its own settings.path";
+pub(crate) const NAMES: &str = "file in its own settings.path";
 
 /// The plugin's name (the manifest name).
 pub const NAME: &str = "busbar-secret-file";
@@ -192,7 +192,7 @@ fn io_refusal(path: &str, e: &std::io::Error) -> SecretModuleError {
 /// Fail-closed: a missing, unreadable, empty, non-regular or over-bound file is refused, and so
 /// is a missing or blank `path` or a reference naming any setting but `path`. The text names the
 /// path, never the content.
-pub fn resolve(
+pub(crate) fn resolve(
     settings: &serde_json::Map<String, serde_json::Value>,
 ) -> SecretResult<Held<Vec<u8>>> {
     let path = reference_path(settings)?;
@@ -240,3 +240,6 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/wiping_tests.rs"]
 mod wiping_tests;
+
+/// The plugin ABI entry and generated registration constant.
+pub use door::{door, MACRO_DOOR};

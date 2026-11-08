@@ -54,6 +54,7 @@ pub const STATEMENT: Statement = Statement {
 pub struct File;
 
 impl Life for File {
+    type Kind = busbar_contract::plugin::markers::SecretKind;
     const CANCEL: u32 = cancel::ABORTED;
 
     fn validate(settings: &[u8]) -> Result<(), Refusal> {
@@ -73,11 +74,12 @@ impl Life for File {
 pub struct Resolve;
 
 impl SafeSlot for Resolve {
+    type Kind = busbar_contract::plugin::markers::SecretKind;
     type In = ResolveIn;
     type Out = ResolveOut;
     type State = Held<File>;
     fn call(
-        instance: Instance<'_, Held<File>>,
+        instance: Instance<'_, Held<File>, busbar_contract::plugin::markers::SecretKind>,
         input: Lent<'_, ResolveIn>,
         mut out: Out<'_, ResolveOut>,
     ) -> Outcome {
@@ -96,12 +98,13 @@ impl SafeSlot for Resolve {
 pub struct Check;
 
 impl SafeSlot for Check {
+    type Kind = busbar_contract::plugin::markers::SecretKind;
     type In = CheckIn;
     type Out = OutHead;
     type State = Held<File>;
 
     fn call(
-        _: Instance<'_, Held<File>>,
+        _: Instance<'_, Held<File>, busbar_contract::plugin::markers::SecretKind>,
         input: Lent<'_, CheckIn>,
         mut out: Out<'_, OutHead>,
     ) -> Outcome {
