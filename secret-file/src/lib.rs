@@ -136,7 +136,7 @@ fn read_bounded(
         if n == 0 {
             break;
         }
-        seen(&chunk[..]);
+        seen(&chunk[..n]);
         if buf.len() + n > MAX {
             return Err(over_bound(path));
         }
