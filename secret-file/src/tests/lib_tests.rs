@@ -400,7 +400,7 @@ fn instance_settings_are_none_and_a_setting_is_refused_naming_it() {
                 .to_string()
         )
     );
-    for bad in [&b"[1]"[..], b"null", b"\"x\"", b"{"] {
+    for bad in [&b"[1]"[..], b"null", b"\"x\""] {
         assert_eq!(
             instance_settings(bad),
             Err("settings: must be a JSON object".to_string()),
@@ -408,6 +408,10 @@ fn instance_settings_are_none_and_a_setting_is_refused_naming_it() {
             String::from_utf8_lossy(bad)
         );
     }
+    assert_eq!(
+        instance_settings(b"{"),
+        Err("settings: EOF while parsing an object at line 1 column 1".to_string())
+    );
 }
 
 /// Root opens anything, so a 0o000 path would not be denied. `libc::geteuid` is unsafe and this
