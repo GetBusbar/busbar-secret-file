@@ -7,6 +7,8 @@ edition = "2021"
 rust-version.workspace = true
 description = "The file secret source for busbar's kind:secret plugin family, on the secret kind's memory ABI: `{ file: /path }` resolves to the file's bytes, untouched, fail-closed."
 license = "Apache-2.0"
+# Owner-provided caller-scan test data; no native library is linked.
+links = "busbar-source-scan-busbar-secret-file"
 
 [lib]
 # rlib only: the logic and its door. A build that LINKS this crate registers `door::door` as its

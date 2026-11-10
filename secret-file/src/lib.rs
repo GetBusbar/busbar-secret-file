@@ -243,3 +243,5 @@ mod wiping_tests;
 
 /// The plugin ABI entry and generated registration constant.
 pub use door::{door, MACRO_DOOR};
+
+include!(concat!(env!("OUT_DIR"), "/root_test_source.rs"));
