@@ -33,3 +33,7 @@ workspace = true
 [dev-dependencies]
 jsonschema = { workspace = true }
 busbar-contract = { workspace = true, features = ["test-seal"] }
+
+# Owner test sources consumed only by the assembly test harness.
+[package.metadata.busbar.test-sources]
+root = "tests/root/mod.rs"
