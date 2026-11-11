@@ -566,7 +566,11 @@ fn a_manifest_stating_another_mechanism_is_refused() {
     let err = load_dropped::<Secret>(&cdylib(), &stating(&[(0, MECHANISM_VERSION + 1)]), bind(&d))
         .expect_err("a manifest stating another mechanism is refused");
     assert!(
-        matches!(err, LoadError::ManifestMechanism { .. }),
+        matches!(
+            &err,
+            LoadError::Rendering(reason)
+                if reason == "byte 8 is not the current mechanism version; repack the plugin"
+        ),
         "{err:?}"
     );
 }
