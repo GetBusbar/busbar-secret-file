@@ -568,8 +568,8 @@ fn a_manifest_stating_another_mechanism_is_refused() {
     assert!(
         matches!(
             &err,
-            LoadError::Rendering(reason)
-                if reason == "byte 8 is not the current mechanism version; repack the plugin"
+            LoadError::ManifestMechanism { stated, host }
+                if *stated == MECHANISM_VERSION + 1 && *host == MECHANISM_VERSION
         ),
         "{err:?}"
     );
